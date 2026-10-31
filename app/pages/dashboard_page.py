@@ -169,13 +169,10 @@ class DashboardPage(ft.Column):
         menu_row = ft.Row([
             ft.Text("Модуль «Личные дела и учёт»", size=16, weight="bold",
                     color=TEXT_DARK),
-            ft.Container(expand=True),
-            ft.OutlinedButton("Открыть старое меню", on_click=lambda e: self.open(None)),
         ])
 
         self.body = ft.Column([
             header,
-            ft.Switch(label="Старое меню Канцлера", on_change=self.toggle_mode),
             ft.Column([menu_row, quick], spacing=12),
             kpis,
             charts,
@@ -185,15 +182,6 @@ class DashboardPage(ft.Column):
         self.controls = [_wrap(page_obj, self.body)] if parent is None else [self.body]
 
     # ------------------------------------------------------------------
-    def toggle_mode(self, e):
-        """Переключатель новый дашборд ⇄ классическое меню Канцлера."""
-        if self.nav_parent is None:
-            return
-        if e.control.value:
-            self.nav_parent.show_legacy_menu()
-        else:
-            self.nav_parent.show_dashboard()
-
     def open(self, cls_name):
         if self.nav_parent is not None:
             self.nav_parent.go_to(cls_name)
