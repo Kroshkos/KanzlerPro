@@ -49,7 +49,9 @@ def main(page: ft.Page):
             primary="#3b82f6",
             secondary="#8b5cf6",
             surface="#ffffff",
-            background="#f1f5f9",
+            surface_container="#f1f5f9",
+            surface_container_low="#f8fafc",
+            surface_container_high="#e2e8f0",
         ),
     )
 
