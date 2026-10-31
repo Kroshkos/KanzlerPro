@@ -47,6 +47,10 @@ class KantslerApp(ft.Column):
 
     def __init__(self, page):
         super().__init__()
+        # Flet 1.x: Column по умолчанию скроллируется (AutoScrollView) и даёт
+        # детям неограниченную высоту — NavigationRail на этом падает с
+        # ошибкой "height is unbounded". Отключаем скролл каркаса.
+        self.scroll = None
         if page is None:
             raise ValueError("Page is null")
         # Защита от прямого входа без авторизации (например, вызов из консоли/отладки)
@@ -93,12 +97,19 @@ class KantslerApp(ft.Column):
                 ft.NavigationRailDestination(icon=icon, selected_icon=icon,
                                              label=label))
 
-        shell = ft.Row([
-            self.nav_rail,
-            ft.VerticalDivider(width=1, color="#e2e8f0"),
-            self.content_area,
-        ], spacing=0, expand=True)
-        self.controls = [shell]
+        # Flet 1.x: NavigationRail не может находиться внутри Column с
+        # неограниченной высотой ("height is unbounded"). Каркас поэтому
+        # строится как Stack на всю страницу; сам KantslerApp добавляется
+        # через page.add(KantslerApp(page)) и заполняет всю высоту окна.
+        self.shell = ft.Container(
+            expand=True,
+            content=ft.Row([
+                self.nav_rail,
+                ft.VerticalDivider(width=1, color="#e2e8f0"),
+                self.content_area,
+            ], spacing=0, expand=True),
+        )
+        self.controls = [self.shell]
         self.show_dashboard()
 
     # ------------------------------------------------------------------
