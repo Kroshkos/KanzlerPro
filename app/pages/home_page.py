@@ -158,7 +158,7 @@ class LegacyMenu(ft.Column):
             page.update()
             return
         self._page = page
-        self.parent = parent  # KantslerApp — чтобы вернуться на дашборд
+        self.nav_parent = parent  # KantslerApp — чтобы вернуться на дашборд
         self.username = session_get(self._page, "username")
 
         # Кнопки основного меню
@@ -279,4 +279,4 @@ class LegacyMenu(ft.Column):
     # Если меню встроено в каркас — переход на новый дашборд
     def back_to_dashboard(self, e=None):
         if self.parent is not None:
-            self.parent.show_dashboard()
+            self.nav_parent.show_dashboard()

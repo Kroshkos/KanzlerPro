@@ -38,7 +38,7 @@ class RoadmapIprPage(ft.Column):
         self.semester_dd = ft.Dropdown(
             label="Семестр", width=140, value="1",
             options=[ft.dropdown.Option(str(i)) for i in range(1, 9)],
-            on_change=lambda e: self.load_student_data())
+            on_select=lambda e: self.load_student_data())
 
         # ---- статусы семестра ----
         self.candidate_switch = ft.Switch(label="Кандидат в резиденты", value=False)
@@ -48,9 +48,9 @@ class RoadmapIprPage(ft.Column):
                                           on_click=self.save_statuses)
 
         # ---- ИПР ----
-        self.plan_field = ft.MultilineTextField(
+        self.plan_field = ft.TextField(
             label="Текст индивидуального плана развития",
-            filled=True, min_lines=6, max_lines=14, expand=True)
+            multiline=True, filled=True, min_lines=6, max_lines=14, expand=True)
         self.plan_status_text = ft.Text("", size=12, color=TEXT_MUTED)
         self.save_plan_btn = ft.OutlinedButton("Сохранить черновик",
                                                icon=ft.Icons.DESCRIPTION,
@@ -137,7 +137,7 @@ class RoadmapIprPage(ft.Column):
             opts.append(ft.dropdown.Option(key=str(r["id"]),
                                            text=f"{full} (ID {r['id']})"))
         self.student_dd.options = opts
-        self.student_dd.on_change = lambda e: self.load_student_data()
+        self.student_dd.on_select = lambda e: self.load_student_data()
         self._page.update()
 
     def load_student_data(self):

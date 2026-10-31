@@ -22,7 +22,7 @@ class RoadmapCatalogPage(ft.Column):
             label="Блок", width=260, value=None,
             options=[ft.dropdown.Option(key=str(b), text=n)
                      for b, n in BLOCK_NAMES.items()],
-            on_change=self.refresh_table)
+            on_select=self.refresh_table)
         self.search_field = ft.TextField(label="Поиск по названию/ID",
                                          width=280, on_change=self.refresh_table)
         self.csv_field = ft.TextField(label="Путь к CSV-справочнику",

@@ -30,7 +30,7 @@ class DashboardPage(ft.Column):
     def __init__(self, page_obj, parent=None):
         super().__init__()
         self._page = page_obj
-        self.parent = parent  # KantslerApp (для встраивания во вкладку)
+        self.nav_parent = parent  # KantslerApp (для встраивания во вкладку)
         username = session_get(page_obj, "username") or "гость"
         role = session_get(page_obj, "role") or ""
 
@@ -187,23 +187,23 @@ class DashboardPage(ft.Column):
     # ------------------------------------------------------------------
     def toggle_mode(self, e):
         """Переключатель новый дашборд ⇄ классическое меню Канцлера."""
-        if self.parent is None:
+        if self.nav_parent is None:
             return
         if e.control.value:
-            self.parent.show_legacy_menu()
+            self.nav_parent.show_legacy_menu()
         else:
-            self.parent.show_dashboard()
+            self.nav_parent.show_dashboard()
 
     def open(self, cls_name):
-        if self.parent is not None:
-            self.parent.go_to(cls_name)
+        if self.nav_parent is not None:
+            self.nav_parent.go_to(cls_name)
         elif cls_name:
             from theme import navigate
             navigate(self._page, cls_name)
 
     def refresh(self, e):
-        if self.parent is not None:
-            self.parent.show_dashboard()
+        if self.nav_parent is not None:
+            self.nav_parent.show_dashboard()
         else:
             from theme import navigate
             navigate(self._page, "DashboardPage")

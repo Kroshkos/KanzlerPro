@@ -30,7 +30,7 @@ class RoadmapExpertPage(ft.Column):
         self.block_dd = ft.Dropdown(label="Блок", width=280, value=None,
                                     options=[ft.dropdown.Option(key=str(b), text=n)
                                              for b, n in BLOCK_NAMES.items()],
-                                    on_change=self.load_achievements)
+                                    on_select=self.load_achievements)
         self.ach_dd = ft.Dropdown(label="Достижение", width=420)
         self.semester_field = ft.TextField(label="Семестр", width=120, value="1")
 
@@ -54,7 +54,7 @@ class RoadmapExpertPage(ft.Column):
                                              ft.dropdown.Option("pending", "На рассмотрении"),
                                              ft.dropdown.Option("approved", "Одобрено"),
                                              ft.dropdown.Option("rejected", "Отклонено"),
-                                         ], on_change=self.refresh_table)
+                                         ], on_select=self.refresh_table)
         self.table = ft.DataTable(
             columns=[ft.DataColumn(ft.Text(h)) for h in
                      ("№", "Курсант", "Достижение", "Семестр", "Статус", "Баллы")]
