@@ -56,7 +56,7 @@ def test_check_user_works_on_unmigrated_db(db):
     """check_user сам тянет миграцию счётчиков (защита от прямого запуска
     поверх старой базы без явного migrate_schema)."""
     _recreate_users_without(db, {"failed_attempts", "locked_until"})
-    db.add_user("probe", "probe-password", "Пользователь")
+    db.add_user("probe", "probe-password", "Пользователь", actor_role=db.ADMIN_ROLE)
     assert db.check_user("probe", "probe-password") is not None
     assert "failed_attempts" in db.table_columns("users")
 
@@ -71,7 +71,7 @@ def test_backup_creates_copy_and_rotation(tmp_path, monkeypatch):
     import database as db
 
     db.init_db()
-    db.add_user("backupuser", "backuppass1", "Пользователь")
+    db.add_user("backupuser", "backuppass1", "Пользователь", actor_role=db.ADMIN_ROLE)
 
     backups_dir = tmp_path / "backups"
     dest = db.backup_database(backups_dir=backups_dir, keep=3)

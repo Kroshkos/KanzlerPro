@@ -334,7 +334,7 @@ def init_db():
             print("[Канцлер] Создан пользователь 'admin'. "
                   f"Задайте свой пароль через меню 'Пользователи' или переменную "
                   f"KANZLER_ADMIN_PASSWORD. Временный пароль: {admin_password}")
-        add_user("admin", admin_password, ADMIN_ROLE)
+        add_user("admin", admin_password, ADMIN_ROLE, actor_role=ADMIN_ROLE)
 
 # Логирование действия
 def log_action(username, action):
@@ -707,7 +707,7 @@ def update_student(student_id, student_data, actor_role=None):
     Возвращает True, если запись найдена и обновлена.
     """
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
-    require_role(actor_role, action="update_student")
+    require_role(actor_role, DEFAULT_ROLE, action="update_student")
     fields = [f for f in STUDENT_FIELDS if f in student_data]
     if not fields:
         return False

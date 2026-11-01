@@ -32,7 +32,7 @@ def photo_env(tmp_path, monkeypatch):
 
 def test_save_photo_writes_file_not_base64(photo_env):
     _db, ps, repo = photo_env
-    sid = repo.add_student({"o_surname": "А", "o_name": "Б", "o_lastname": "В"})
+    sid = repo.add_student({"o_surname": "А", "o_name": "Б", "o_lastname": "В"}, actor_role='Администратор')
     name = ps.save_photo(b"\xff\xd8fakejpeg", sid, "jpg")
     assert name == f"{sid}.jpg"
     repo.update_student_fields(sid, {"o_photo": name})
@@ -56,7 +56,7 @@ def test_photo_src_backwards_compatible_with_base64(photo_env):
 
 def test_get_student_columns_matches_select_star(photo_env):
     _db, _ps, repo = photo_env
-    sid = repo.add_student({"o_surname": "X"})
+    sid = repo.add_student({"o_surname": "X"}, actor_role='Администратор')
     row = repo.get_student_full(sid)
     cols = repo.get_student_columns()
     assert len(cols) == len(row)
@@ -66,11 +66,11 @@ def test_get_student_columns_matches_select_star(photo_env):
 
 def test_delete_student_cascades_child_rows(photo_env):
     db, _ps, repo = photo_env
-    sid = repo.add_student({"o_surname": "Ю", "o_name": "Я"})
+    sid = repo.add_student({"o_surname": "Ю", "o_name": "Я"}, actor_role='Администратор')
     repo.add_position(sid, "командир", "admin", "2026-01-01", "1")
     repo.add_rank(sid, "лейтенант", "admin", "2026-01-02", "2")
-    db.add_encouragement(sid, "грамота", "за успехи", "admin", "2026-01-03", "3")
-    db.add_penalty(sid, "выговор", "за опоздание", "2026-01-04", "admin", "2026-01-05", "4")
+    db.add_encouragement(sid, "грамота", "за успехи", "admin", "2026-01-03", "3", actor_role=db.ADMIN_ROLE)
+    db.add_penalty(sid, "выговор", "за опоздание", "2026-01-04", "admin", "2026-01-05", "4", actor_role=db.ADMIN_ROLE)
 
     assert repo.delete_student(sid) is True
     assert repo.get_student_full(sid) is None
@@ -79,7 +79,7 @@ def test_delete_student_cascades_child_rows(photo_env):
     assert db.get_encouragements_by_student(sid) == []
     assert db.get_penalties_by_student(sid) == []
     # Чужие данные не задеты
-    other = repo.add_student({"o_surname": "Другой"})
+    other = repo.add_student({"o_surname": "Другой"}, actor_role='Администратор')
     assert repo.delete_student(999999) is False
     assert repo.get_student_full(other) is not None
 
@@ -91,7 +91,7 @@ def test_edit_page_keys_pattern(photo_env):
     Проверяем канонический паттерн фильтрации обновлений по схеме.
     """
     _db, _ps, repo = photo_env
-    sid = repo.add_student({"o_surname": "Редакт", "o_name": "Тест"})
+    sid = repo.add_student({"o_surname": "Редакт", "o_name": "Тест"}, actor_role='Администратор')
     student = repo.get_student_full(sid)
     assert hasattr(student, "keys"), "get_student_full должен возвращать sqlite3.Row"
     updates = {"o_surname": "Новая", "нет_такой_колонки": "x"}
@@ -108,7 +108,7 @@ def test_migrate_legacy_base64(photo_env):
     """Старые base64-значения в o_photo переносятся в файлы при миграции."""
     import base64 as b64
     _db, ps, repo = photo_env
-    sid = repo.add_student({"o_surname": "Старый", "o_name": "Ф", "о_lastname" if False else "o_lastname": "Ото"})
+    sid = repo.add_student({"o_surname": "Старый", "o_name": "Ф", "о_lastname" if False else "o_lastname": "Ото"}, actor_role='Администратор')
     legacy = b64.b64encode(b"\x89PNG fake image bytes" * 10).decode()
     assert ps.looks_like_base64(legacy)
     _db.execute_query("UPDATE students SET o_photo = ? WHERE id = ?", params=(legacy, sid))

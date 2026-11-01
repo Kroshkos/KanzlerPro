@@ -7,7 +7,7 @@
 Теперь мутаторы вызывают require_role(...) перед записью:
 
     from access import require_role
-    from constants import ADMIN_ROLE
+    from constants import ADMIN_ROLE, ROLES
 
     def delete_user(user_id, actor_role=None):
         require_role(actor_role, ADMIN_ROLE, action="удаление пользователя")
@@ -21,11 +21,11 @@ actor_role — роль того, кто выполняет действие; е
 переведены, режим совместимости ужесточается до отказа (см. ALLOW_UNSCOPED).
 """
 
-from constants import ADMIN_ROLE
+from constants import ADMIN_ROLE, ROLES
 
 #: True — вызовы без actor_role разрешены (переходный период).
 #: False — вызовы без actor_role отклоняются как недостаточное право.
-ALLOW_UNSCOPED = True
+ALLOW_UNSCOPED = False
 
 
 class PermissionDeniedError(PermissionError):
@@ -55,6 +55,10 @@ def require_role(actor_role, required_role=ADMIN_ROLE, action=""):
 
     Бросает PermissionDeniedError, если роль не подходит. Если actor_role
     пустой (сессия не проброшена), поведение зависит от ALLOW_UNSCOPED.
+
+    Иерархия ролей (BACKLOG B-1): «Администратор» может всё, что может
+    «Пользователь»; обратное — нет. Поэтому проверка формулируется как
+    «минимально требуемая роль», а не точное совпадение.
     """
     if actor_role is None or actor_role == "":
         if ALLOW_UNSCOPED:
@@ -64,11 +68,15 @@ def require_role(actor_role, required_role=ADMIN_ROLE, action=""):
         raise PermissionDeniedError(
             f"Недостаточно прав для действия: {action or 'мутация данных'} "
             "(роль актора не передана)")
-    if required_role == ADMIN_ROLE and not is_admin_role(actor_role):
+    if required_role == ADMIN_ROLE:
+        if not is_admin_role(actor_role):
+            raise PermissionDeniedError(
+                f"Недостаточно прав для действия: {action or 'мутация данных'}. "
+                f"Требуется роль «{ADMIN_ROLE}»")
+        return
+    # Требуется минимальная роль «Пользователь»: её имеют обе роли
+    # (пустая/неизвестная роль — отказ).
+    if actor_role not in ROLES:
         raise PermissionDeniedError(
             f"Недостаточно прав для действия: {action or 'мутация данных'}. "
-            f"Требуется роль «{ADMIN_ROLE}»")
-    if required_role != ADMIN_ROLE and actor_role != required_role:
-        raise PermissionDeniedError(
-            f"Недостаточно прав для действия: {action or 'мутация данных'}. "
-            f"Требуется роль «{required_role}»")
+            f"Требуется роль из списка {list(ROLES)}")
