@@ -1327,7 +1327,8 @@ class EditStudentPage(ft.Column):
                     val = format_date(val)
                 updates[fname] = val
             # fields уже отфильтрован по схеме (см. save()), на всякий случай
-            # оставляем только реально существующие колонки:
+            # оставляем только реально существующие колонки. student — это
+            # sqlite3.Row: .keys() даёт имена колонок, set(row) был бы ошибкой.
             existing = set(student.keys())
             updates = {k: v for k, v in updates.items() if k in existing}
 

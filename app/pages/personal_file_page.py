@@ -5,12 +5,12 @@ import pandas as pd
 # даже на системах без установленной среды X11/tkinter.
 import os
 import shutil
-import base64
 from openpyxl.utils import get_column_letter
 from datetime import datetime, timedelta
-from database import add_student, get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
+from database import get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
+import photo_storage
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
 from pages import shell
@@ -234,56 +234,30 @@ class PersonalFilePage(ft.Column):
                 ft.Text("ЛИЧНОЕ ДЕЛО", size=20, weight="bold", text_align="center")
             )
 
-            # Функция для проверки корректности base64
-            def is_valid_base64(base64_string):
-                try:
-                    base64.b64decode(base64_string, validate=True)
-                    return True
-                except (base64.binascii.Error, ValueError):
-                    return False
-
-            # Функция для исправления padding в base64
-            def fix_base64_padding(base64_string):
-                padding = len(base64_string) % 4
-                if padding:
-                    base64_string += '=' * (4 - padding)
-                return base64_string
-
             # Создаем контейнер для фотографии
             photo_container = ft.Column()
 
-            # Проверяем и добавляем фотографию
-            if student_data[24]:  # Предполагаем, что photo_base64 находится в 23-м столбце
-                base64_string = student_data[24].strip()  # Удаляем лишние пробелы и переносы
+            # Фото читается через photo_storage: новое хранение — имя файла в
+            # PHOTOS_DIR, старое — base64 в колонке (обратная совместимость).
+            # Индекс o_photo берём из схемы, а не хардкод [24] (SELECT * тянет
+            # порядок колонок за собой — любой ALTER ломал бы карточку).
+            photo_value = ""
+            try:
+                cols = [d[0] for d in repo.get_student_columns()]
+                photo_value = student_data[cols.index("o_photo")] or ""
+            except (ValueError, IndexError):
+                photo_value = student_data[24] if len(student_data) > 24 else ""
 
-                if is_valid_base64(base64_string):
-                    # В Flet >= 0.80 параметр src_base64 удалён: base64 передаётся
-                    # через src в формате data-URI.
-                    photo_container.controls.append(
-                        ft.Image(
-                            src=f"data:image/jpeg;base64,{base64_string}",
-                            width=300,
-                            height=400,
-                            fit=ft.BoxFit.COVER,
-                            border_radius=10,
-                        )
-                    )
-                else:
-                    base64_string = fix_base64_padding(base64_string)
-                    if is_valid_base64(base64_string):
-                        photo_container.controls.append(
-                            ft.Image(
-                                src=f"data:image/jpeg;base64,{base64_string}",
-                                width=300,
-                                height=400,
-                                fit=ft.BoxFit.COVER,
-                                border_radius=10,
-                            )
-                        )
-                    else:
-                        photo_container.controls.append(
-                            ft.Text("Ошибка: некорректный формат изображения", color="red")
-                        )
+            src = photo_storage.photo_src(photo_value)
+            if src:
+                photo_container.controls.append(
+                    ft.Image(src=src, width=300, height=400,
+                             fit=ft.BoxFit.COVER, border_radius=10)
+                )
+            elif photo_value and not photo_storage.looks_like_base64(photo_value):
+                photo_container.controls.append(
+                    ft.Text("Ошибка: файл фотографии не найден", color="red")
+                )
             else:
                 photo_container.controls.append(
                     ft.Text("Фотография отсутствует", color="gray")

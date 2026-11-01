@@ -356,3 +356,58 @@ def update_student_fields(student_id: int, fields: dict) -> bool:
     from database import update_student
 
     return update_student(student_id, fields)
+
+
+def get_student_columns() -> list:
+    """Имена колонок таблицы students в порядке SELECT * (PRAGMA table_info).
+
+    Нужен UI-слою, чтобы не хардкодить индексы вроде student_data[24]:
+    порядок колонок меняется при любом ALTER TABLE.
+    """
+    rows = execute_query("PRAGMA table_info(students)", fetch=True) or []
+    return [r[1] for r in rows]
+
+
+def add_student(student_data: dict) -> int:
+    """Создать курсанта по плоскому dict колонок students.
+
+    Тонкая обёртка над database.add_student(): INSERT со строго параметризованным
+    списком колонок (белый список STUDENT_FIELDS), возврат lastrowid.
+    Вызывающая сторона (форма kadri_page) передаёт данные, собранные и
+    нормализованные через FIELD_ALIASES/_validated_form_data.
+    """
+    from database import add_student as _db_add_student
+
+    return _db_add_student(student_data)
+
+
+def delete_student(student_id: int) -> bool:
+    """Полностью удалить курсанта и связанные записи (каскад вручную).
+
+    Используется там, где нужен РЕАЛЬНЫЙ DELETE (например, отклонённая заявка
+    с status="deleted"), а не мягкое удаление флагом. Дочерние таблицы без FK-
+    каскада чистятся явно, чтобы не оставлять сиротские строки. Файл фото —
+    через photo_storage.delete_photo() (вызывающая сторона передаёт o_photo).
+    """
+    from database import connect_to_db
+
+    conn = connect_to_db()
+    cursor = conn.cursor()
+    try:
+        for table in ("position_history", "rank_history", "encouragements",
+                      "penalties", "session_results", "roadmap_reviews",
+                      "individual_plans", "manual_scores"):
+            try:
+                cursor.execute(f"DELETE FROM {table} WHERE student_id = ?",
+                               (student_id,))
+            except Exception:
+                # Таблица может отсутствовать в старых БД — удаляем запись
+                # о курсанте в любом случае, но ошибку логируем, не глотаем.
+                from utils_logger import log_except
+                log_except(f"delete_student: таблица {table}")
+        cursor.execute("DELETE FROM students WHERE id = ?", (student_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        cursor.close()
+        conn.close()
