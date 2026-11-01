@@ -8,9 +8,11 @@ import shutil
 import base64
 from openpyxl.utils import get_column_letter
 from datetime import datetime, timedelta
-from database import add_student, get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
+from database import get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
+from repositories import update_student_fields
+import photo_storage
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
 from pages import shell
@@ -102,7 +104,15 @@ class AddStudentPage(ft.Column):
         self.back_button = ft.FilledButton("Назад", on_click=self.back_click)
         self.save_button = ft.FilledButton("Сохранить", on_click=self.save_click)
 
-        # Поле для загрузки фотографии
+        # --- Фотографии курсантов -------------------------------------------
+        # Загруженные фото хранятся в файловом хранилище DATA_DIR/photos
+        # (см. app/photo_storage.py), а в колонке students.o_photo лежит
+        # относительное имя файла. Раньше base64 писался прямо в БД — из-за
+        # этого база раздувалась и строились огромные Row-объекты.
+        # photo_base64 хранит ТЕКУЩЕЕ выбранное фото как data-URI (или None);
+        # save_click сохраняет его через photo_storage.save_photo() и пишет
+        # в student_data["o_photo"] имя файла.
+        self.photo_base64 = None
         self.photo_picker = ft.FilePicker(on_result=self.handle_photo_upload)
         # Файловый диалог живёт в overlay страницы; добавляем ровно один раз
         # (страница может пересоздаваться при навигации).
@@ -113,12 +123,24 @@ class AddStudentPage(ft.Column):
         except Exception:
             pass  # overlay недоступен (не-рантайм страница) — диалог не критичен
 
-        self.photo_base64 = DEFAULT_PHOTO_BASE64  # Используем Base64 для изображения по умолчанию
+        self.photo_bytes: bytes | None = None  # байты выбранного фото (для сохранения на диске)
+        self.photo_ext: str = "jpg"
 
+        def _default_photo_src():
+            """Заглушка по умолчанию из assets/ как data-URI (файл бинарный,
+            не тащим ~1 МБ base64-литерал в код страницы)."""
+            try:
+                with open(os.path.join(os.path.dirname(photo_storage.__file__),
+                                       os.pardir, "assets", "default_photo.jpg"), "rb") as f:
+                    return "data:image/jpeg;base64," + base64.b64encode(f.read()).decode("ascii")
+            except OSError:
+                return ""
+
+        self._default_photo_src = _default_photo_src()
         self.photo_preview = ft.Image(
             # В Flet >= 0.80 параметр src_base64 удалён: base64 передаётся
-            # через src в формате data-URI.
-            src=f"data:image/jpeg;base64,{self.photo_base64}",
+            # через src в формате data-URI; файлы-фото — локальным путём.
+            src=self._default_photo_src,
             width=150,
             height=150,
             fit=ft.BoxFit.COVER,
@@ -981,290 +1003,148 @@ class AddStudentPage(ft.Column):
             self._field_names.append(name)
         return field
 
+    # --- Нормализация имён полей ---------------------------------------------
+    # Исторически часть UI-полей объявлена с опечатками (ld_pasport_number и
+    # т.п.), а колонки БД называются иначе (ld_passport_number). Раньше это
+    # приводило к тихой потере данных: значения из таких полей в INSERT не
+    # попадали. Собираем данные формы через collect_form_data(), который
+    # отображает имена полей на реальные колонки students.
+    FIELD_ALIASES = {
+        "ld_pasport_number": "ld_passport_number",
+        "ld_pasport_date_given": "ld_passport_date_given",
+        "ld_pasport_unit_code_given": "ld_passport_unit_code_given",
+        "ld_pasport_place_given": "ld_passport_place_given",
+    }
+
+    # Даты формы добавления курсанта: поле → русская подпись для сообщения
+    # об ошибке формата. Ключи — уже нормализованные имена колонок БД.
+    DATE_FIELDS = {
+        "o_date_of_birth": "Дата рождения",
+        "ld_passport_date_given": "Дата выдачи паспорта",
+        "ld_vb_date_given": "Дата выдачи военного билета",
+        "ld_vb_vs_date_of_conscription": "Дата призыва",
+        "ld_vb_post_date_assigned": "Дата назначения должности",
+        "ld_vb_rank_date_assigned": "Дата присвоения звания",
+        "ld_vb_fingerprinting_date": "Дата дактилоскопии",
+        "ld_vb_contract_date": "Дата контракта",
+        "ld_education_date_given": "Дата выдачи документа об образовании",
+        "ld_drl_date_given": "Дата выдачи водительского удостоверения",
+        "ld_drl_date_end": "Дата окончания действия ВУ",
+        "ld_ccv_date_given": "Дата выдачи КЦВ",
+        "ld_pvk_date_counted": "Дата учёта в ПВК",
+        "rd_father_date_of_birth": "Дата рождения отца",
+        "rd_father_passport_date_given": "Дата выдачи паспорта отца",
+        "rd_mother_date_of_birth": "Дата рождения матери",
+        "rd_mother_passport_date_given": "Дата выдачи паспорта матери",
+    }
+
     def collect_form_data(self):
-        """Собрать {имя_поля: значение} по зарегистрированным полям формы."""
-        return {name: getattr(self, name).value for name in self._field_names}
+        """Собрать {колонка students: значение} по зарегистрированным полям.
+
+        Имена с историческими опечатками нормализуются FIELD_ALIASES;
+        da_summary_score рассчитывается вызывающей стороной после валидации.
+        """
+        from database import STUDENT_FIELDS
+        data = {}
+        for name in self._field_names:
+            col = self.FIELD_ALIASES.get(name, name)
+            if col in STUDENT_FIELDS:
+                data[col] = getattr(self, name).value
+        return data
 
     def reset_form(self):
-        """Очистить все зарегистрированные поля формы."""
+        """Очистить все зарегистрированные поля формы и превью фото."""
         for name in self._field_names:
             getattr(self, name).value = ""
+        self.o_gender.value = ""
+        self.photo_bytes = None
+        self.photo_ext = "jpg"
+        self.photo_preview.src = self._default_photo_src
 
     def handle_photo_upload(self, e):
         # В Flet >= 0.80 pick_files() возвращает list[FilePickerFile] напрямую,
         # а older API присылал объект FilePickerResultEvent с полем .files.
         files = getattr(e, "files", e) or []
-        if files:
-            # Получаем путь к выбранному файлу
-            file_path = files[0].path
+        if not files:
+            return
+        file_path = files[0].path
+        # Байты храним как есть: при сохранении записи они лягут в файловое
+        # хранилище (photo_storage), в БД пойдёт только имя файла.
+        with open(file_path, "rb") as image_file:
+            self.photo_bytes = image_file.read()
+        ext = os.path.splitext(file_path)[1].lstrip(".").lower() or "jpg"
+        self.photo_ext = ext if ext in photo_storage.ALLOWED_EXTENSIONS else "jpg"
 
-            # Читаем файл и кодируем его в Base64
-            with open(file_path, "rb") as image_file:
-                self.photo_base64 = base64.b64encode(image_file.read()).decode("utf-8")
-
-            # Обновляем превью фотографии
-            self.photo_preview.src = f"data:image/jpeg;base64,{self.photo_base64}"
-            self._page.update()
+        # Обновляем превью фотографии (data-URI — самый переносимый способ
+        # показать ещё не сохранённое изображение).
+        b64 = base64.b64encode(self.photo_bytes).decode("utf-8")
+        mime = "image/png" if self.photo_ext == "png" else "image/jpeg"
+        self.photo_preview.src = f"data:{mime};base64,{b64}"
+        self._page.update()
 
     def save_click(self, e):
-        self.da_summary_score = f"{(to_int(self.da_score_chemistry.value, 0) + to_int(self.da_score_biology.value, 0) + to_int(self.da_score_rusian.value, 0) + to_int(self.da_score_fp.value, 0))}"
-        def format_date(date_str):
-            if not date_str:  # Если дата не указана, возвращаем None
+        # --- 1. Валидация (до изменения состояния) ---------------------------
+        try:
+            data = self._validated_form_data()
+        except ValueError as ex:
+            show_snack(self._page, ft.Text(f"Ошибка: {ex}"))
+            self._page.update()
+            return
+
+        # --- 2. Агрегированный балл -----------------------------------------
+        data["da_summary_score"] = str(
+            to_int(self.da_score_chemistry.value, 0)
+            + to_int(self.da_score_biology.value, 0)
+            + to_int(self.da_score_rusian.value, 0)
+            + to_int(self.da_score_fp.value, 0))
+
+        # --- 3. Запись в БД + фотохранилище ----------------------------------
+        try:
+            student_id = repo.add_student(data)
+            if self.photo_bytes:
+                # Фото — файл в DATA_DIR/photos; в БД только имя файла.
+                filename = photo_storage.save_photo(
+                    self.photo_bytes, student_id, self.photo_ext)
+                repo.update_student_fields(student_id, {"o_photo": filename})
+        except Exception as ex:
+            show_snack(self._page, ft.Text(f"Ошибка: {ex}"))
+            self._page.update()
+            return
+
+        # --- 4. Сброс формы ---------------------------------------------------
+        self.reset_form()
+        show_snack(self._page, ft.Text("Курсант успешно добавлен"))
+        self._page.update()
+        log_action(session_get(self._page, "username"),
+                   f"Добавлен студент: {data['o_surname']} {data['o_name']} {data['o_lastname']}")
+
+    def _validated_form_data(self) -> dict:
+        """Собрать данные формы в плоский dict по колонкам students.
+
+        * Даты «ДД.ММ.ГГГГ» конвертируются в ISO; битая дата — ValueError с
+          понятным сообщением (раньше ошибка молча портила запись).
+        * Имена UI-полей с историческими опечатками (ld_pasport_number и
+          т.п.) нормализуются к реальным колонкам БД через FIELD_ALIASES.
+        * da_summary_score считается в save_click ПОСЛЕ валидации.
+        """
+        def format_date(date_str, label=""):
+            if not date_str:
                 return None
             try:
                 return datetime.strptime(date_str, "%d.%m.%Y").strftime("%Y-%m-%d")
             except ValueError:
-                raise ValueError(f"Некорректный формат даты: {date_str}. Используйте ДД.ММ.ГГГГ")
-        
-        try:
-            # Собираем данные из всех полей
-            student_data = {
-                "o_surname": self.o_surname.value,
-                "o_name": self.o_name.value,
-                "o_lastname": self.o_lastname.value,
-                "o_course": self.o_course.value,
-                "o_group_name": self.o_group_name.value,
-                "o_gender": self.o_gender.value,
-                "o_age": self.o_age.value,
-                "o_date_of_birth": format_date(self.o_date_of_birth.value),
-                "o_place_of_birth": self.o_place_of_birth.value,
-                "o_citizenship": self.o_citizenship.value,
-                "o_nationality": self.o_nationality.value,
-                "o_religion": self.o_religion.value,
-                "o_marital_status": self.o_marital_status.value,
-                "o_occupation_before_military_service": self.o_occupation_before_military_service.value,
-                "o_bad_habits": self.o_bad_habits.value,
-                "o_health_status": self.o_health_status.value,
-                "o_sports_categories": self.o_sports_categories.value,
-                "o_interests": self.o_interests.value,
-                "o_skills": self.o_skills.value,
-                "o_sociometric_indicators": self.o_sociometric_indicators.value,
-                "kontact_residential_address": self.kontact_residential_address.value,
-                "kontact_number": self.kontact_number.value,
-                "kontact_email": self.kontact_email.value,
-                "o_photo": self.photo_base64,
-                "ld_passport_series": self.ld_passport_series.value,
-                "ld_passport_number": self.ld_pasport_number.value,
-                "ld_passport_date_given": format_date(self.ld_pasport_date_given.value),
-                "ld_passport_unit_code_given": self.ld_pasport_unit_code_given.value,
-                "ld_passport_place_given": self.ld_pasport_place_given.value,
-                "ld_passport_children": self.ld_passport_children.value,
-                "ld_vb_personal_number": self.ld_vb_personal_number.value,
-                "ld_vb_series": self.ld_vb_series.value,
-                "ld_vb_number": self.ld_vb_number.value,
-                "ld_vb_date_given": format_date(self.ld_vb_date_given.value),
-                "ld_vb_place_given": self.ld_vb_place_given.value,
-                "ld_vb_vs_date_of_conscription": format_date(self.ld_vb_vs_date_of_conscription.value),
-                "ld_vb_vs_called_upon": self.ld_vb_vs_called_upon.value,
-                "ld_vb_post_post": self.ld_vb_post_post.value,
-                "ld_vb_post_assigned": self.ld_vb_post_assigned.value,
-                "ld_vb_post_date_assigned": format_date(self.ld_vb_post_date_assigned.value),
-                "ld_vb_post_number_order": self.ld_vb_post_number_order.value,
-                "ld_vb_rank_rank": self.ld_vb_rank_rank.value,
-                "ld_vb_rank_assigned": self.ld_vb_rank_assigned.value,
-                "ld_vb_rank_date_assigned": format_date(self.ld_vb_rank_date_assigned.value),
-                "ld_vb_rank_number_order": self.ld_vb_rank_number_order.value,
-                "ld_vb_fingerprinting_date": format_date(self.ld_vb_fingerprinting_date.value),
-                "ld_vb_fingerprinting_place": self.ld_vb_fingerprinting_place.value,
-                "ld_vb_contract_number": self.ld_vb_contract_number.value,
-                "ld_vb_contract_term": self.ld_vb_contract_term.value,
-                "ld_vb_contract_date": format_date(self.ld_vb_contract_date.value),
-                "ld_vb_contract_number_order": self.ld_vb_contract_number_order.value,
-                "ld_inn": self.ld_inn.value,
-                "ld_snils": self.ld_snils.value,
-                "ld_oms": self.ld_oms.value,
-                "ld_education_tip": self.ld_education_tip.value,
-                "ld_education_level": self.ld_education_level.value,
-                "ld_education_series": self.ld_education_series.value,
-                "ld_education_number": self.ld_education_number.value,
-                "ld_education_date_given": format_date(self.ld_education_date_given.value),
-                "ld_education_name_given": self.ld_education_name_given.value,
-                "ld_education_city": self.ld_education_city.value,
-                "ld_education_qualification": self.ld_education_qualification.value,
-                "ld_education_specialization": self.ld_education_specialization.value,
-                "ld_education_form": self.ld_education_form.value,
-                "ld_drl_series": self.ld_drl_series.value,
-                "ld_drl_number": self.ld_drl_number.value,
-                "ld_drl_date_given": format_date(self.ld_drl_date_given.value),
-                "ld_drl_date_end": format_date(self.ld_drl_date_end.value),
-                "ld_drl_unit_code_given": self.ld_drl_unit_code_given.value,
-                "ld_drl_category": self.ld_drl_category.value,
-                "ld_ccv_series": self.ld_ccv_series.value,
-                "ld_ccv_number": self.ld_ccv_number.value,
-                "ld_ccv_date_given": format_date(self.ld_ccv_date_given.value),
-                "ld_pvk_date_counted": format_date(self.ld_pvk_date_counted.value),
-                "ld_pvk_address": self.ld_pvk_address.value,
-                "ld_pvk_type_property": self.ld_pvk_type_property.value,
-                "ld_pvk_additional_number": self.ld_pvk_additional_number.value,
-                "ld_pvk_messenger_main": self.ld_pvk_messenger_main.value,
-                "ld_pvk_messenger_additional": self.ld_pvk_messenger_additional.value,
-                "if_social_origin": self.if_social_origin.value,
-                "if_family_composition": self.if_family_composition.value,
-                "if_number_of_children": self.if_number_of_children.value,
-                "if_dysfunctional_relatives": self.if_dysfunctional_relatives.value,
-                "da_score_chemistry": self.da_score_chemistry.value,
-                "da_score_biology": self.da_score_biology.value,
-                "da_score_rusian": self.da_score_rusian.value,
-                "da_score_fp": self.da_score_fp.value,
-                "da_summary_score": f"{(to_int(self.da_score_chemistry.value, 0) + to_int(self.da_score_biology.value, 0) + to_int(self.da_score_rusian.value, 0) + to_int(self.da_score_fp.value, 0))}",
-                "da_group_number": self.da_group_number.value,
-                "da_score_diploma": self.da_score_diploma.value,
-                "da_additional_education": self.da_additional_education.value,
-                "rd_father_surname": self.rd_father_surname.value,
-                "rd_father_name": self.rd_father_name.value,
-                "rd_father_lastname": self.rd_father_lastname.value,
-                "rd_father_date_of_birth": format_date(self.rd_father_date_of_birth.value),
-                "rd_father_place_of_birth": self.rd_father_place_of_birth.value,
-                "rd_father_citizenship": self.rd_father_citizenship.value,
-                "rd_father_passport_series": self.rd_father_passport_series.value,
-                "rd_father_passport_number": self.rd_father_passport_number.value,
-                "rd_father_passport_date_given": format_date(self.rd_father_passport_date_given.value),
-                "rd_father_passport_place_given": self.rd_father_passport_place_given.value,
-                "rd_father_passport_unit_code_given": self.rd_father_passport_unit_code_given.value,
-                "rd_father_number": self.rd_father_number.value,
-                "rd_mother_surname": self.rd_mother_surname.value,
-                "rd_mother_name": self.rd_mother_name.value,
-                "rd_mother_lastname": self.rd_mother_lastname.value,
-                "rd_mother_date_of_birth": format_date(self.rd_mother_date_of_birth.value),
-                "rd_mother_place_of_birth": self.rd_mother_place_of_birth.value,
-                "rd_mother_citizenship": self.rd_mother_citizenship.value,
-                "rd_mother_passport_series": self.rd_mother_passport_series.value,
-                "rd_mother_passport_number": self.rd_mother_passport_number.value,
-                "rd_mother_passport_date_given": format_date(self.rd_mother_passport_date_given.value),
-                "rd_mother_passport_place_given": self.rd_mother_passport_place_given.value,
-                "rd_mother_passport_unit_code_given": self.rd_mother_passport_unit_code_given.value,
-                "rd_mother_number": self.rd_mother_number.value,
-                "rd_other_info": self.rd_other_info.value,
-            }
+                raise ValueError(
+                    f"Некорректный формат даты в поле «{label or date_str}»: "
+                    f"{date_str}. Используйте ДД.ММ.ГГГГ")
 
-            add_student(student_data)
-            
-
-            # Очищаем поля ввода
-            self.o_surname.value = ""
-            self.o_name.value = ""
-            self.o_lastname.value = ""
-            self.o_course.value = ""
-            self.o_group_name.value = ""
-            self.o_gender.value = ""
-            self.o_age.value = ""
-            self.o_date_of_birth.value = ""
-            self.o_place_of_birth.value = ""
-            self.o_citizenship.value = ""
-            self.o_nationality.value = ""
-            self.o_religion.value = ""
-            self.o_marital_status.value = ""
-            self.o_occupation_before_military_service.value = ""
-            self.o_bad_habits.value = ""
-            self.o_health_status.value = ""
-            self.o_sports_categories.value = ""
-            self.o_interests.value = ""
-            self.o_skills.value = ""
-            self.o_sociometric_indicators.value = ""
-            self.kontact_residential_address.value = ""
-            self.kontact_number.value = ""
-            self.kontact_email.value = ""
-            self.photo_preview.src = f"data:image/jpeg;base64,{DEFAULT_PHOTO_BASE64}"
-            self.photo_base64 = DEFAULT_PHOTO_BASE64
-            self.ld_passport_series.value = ""
-            self.ld_pasport_number.value = ""
-            self.ld_pasport_date_given.value = ""
-            self.ld_pasport_unit_code_given.value = ""
-            self.ld_pasport_place_given.value = ""
-            self.ld_passport_children.value = ""
-            self.ld_vb_personal_number.value = ""
-            self.ld_vb_series.value = ""
-            self.ld_vb_number.value = ""
-            self.ld_vb_date_given.value = ""
-            self.ld_vb_place_given.value = ""
-            self.ld_vb_vs_date_of_conscription.value = ""
-            self.ld_vb_vs_called_upon.value = ""
-            self.ld_vb_post_post.value = ""
-            self.ld_vb_post_assigned.value = ""
-            self.ld_vb_post_date_assigned.value = ""
-            self.ld_vb_post_number_order.value = ""
-            self.ld_vb_rank_rank.value = ""
-            self.ld_vb_rank_assigned.value = ""
-            self.ld_vb_rank_date_assigned.value = ""
-            self.ld_vb_rank_number_order.value = ""
-            self.ld_vb_fingerprinting_date.value = ""
-            self.ld_vb_fingerprinting_place.value = ""
-            self.ld_vb_contract_number.value = ""
-            self.ld_vb_contract_term.value = ""
-            self.ld_vb_contract_date.value = ""
-            self.ld_vb_contract_number_order.value = ""
-            self.ld_inn.value = ""
-            self.ld_snils.value = ""
-            self.ld_oms.value = ""
-            self.ld_education_tip.value = ""
-            self.ld_education_level.value = ""
-            self.ld_education_series.value = ""
-            self.ld_education_number.value = ""
-            self.ld_education_date_given.value = ""
-            self.ld_education_name_given.value = ""
-            self.ld_education_city.value = ""
-            self.ld_education_qualification.value = ""
-            self.ld_education_specialization.value = ""
-            self.ld_education_form.value = ""
-            self.ld_drl_series.value = ""
-            self.ld_drl_number.value = ""
-            self.ld_drl_date_given.value = ""
-            self.ld_drl_date_end.value = ""
-            self.ld_drl_unit_code_given.value = ""
-            self.ld_drl_category.value = ""
-            self.ld_ccv_series.value = ""
-            self.ld_ccv_number.value = ""
-            self.ld_ccv_date_given.value = ""
-            self.ld_pvk_date_counted.value = ""
-            self.ld_pvk_address.value = ""
-            self.ld_pvk_type_property.value = ""
-            self.ld_pvk_additional_number.value = ""
-            self.ld_pvk_messenger_main.value = ""
-            self.ld_pvk_messenger_additional.value = ""
-            self.if_social_origin.value = ""
-            self.if_family_composition.value = ""
-            self.if_number_of_children.value = ""
-            self.if_dysfunctional_relatives.value = ""
-            self.da_score_chemistry.value = ""
-            self.da_score_biology.value = ""
-            self.da_score_rusian.value = ""
-            self.da_score_fp.value = ""
-            self.da_group_number.value = ""
-            self.da_score_diploma.value = ""
-            self.da_additional_education.value = ""
-            self.rd_father_surname.value = ""
-            self.rd_father_name.value = ""
-            self.rd_father_lastname.value = ""
-            self.rd_father_date_of_birth.value = ""
-            self.rd_father_place_of_birth.value = ""
-            self.rd_father_citizenship.value = ""
-            self.rd_father_passport_series.value = ""
-            self.rd_father_passport_number.value = ""
-            self.rd_father_passport_date_given.value = ""
-            self.rd_father_passport_place_given.value = ""
-            self.rd_father_passport_unit_code_given.value = ""
-            self.rd_father_number.value = ""
-            self.rd_mother_surname.value = ""
-            self.rd_mother_name.value = ""
-            self.rd_mother_lastname.value = ""
-            self.rd_mother_date_of_birth.value = ""
-            self.rd_mother_place_of_birth.value = ""
-            self.rd_mother_citizenship.value = ""
-            self.rd_mother_passport_series.value = ""
-            self.rd_mother_passport_number.value = ""
-            self.rd_mother_passport_date_given.value = ""
-            self.rd_mother_passport_place_given.value = ""
-            self.rd_mother_passport_unit_code_given.value = ""
-            self.rd_mother_number.value = ""
-            self.rd_other_info.value = ""
-
-            # Показываем сообщение успешного созранения
-            show_snack(self._page, ft.Text("Курсант успешно добавлен"))
-            self._page.update()
-            log_action(session_get(self._page, "username"), f"Добавлен студент: {student_data['o_surname']} {student_data['o_name']} {student_data['o_lastname']}")
-        except Exception as ex:
-            show_snack(self._page, ft.Text(f"Ошибка: {ex}"))
-            self._page.update()
+        raw = self.collect_form_data()
+        for fname, label in self.DATE_FIELDS.items():
+            if fname in raw:
+                raw[fname] = format_date(raw[fname], label)
+        # Фото пока не сохранено на диск: в БД пойдёт пустое значение,
+        # имя файла подставит save_click после получения student_id.
+        raw["o_photo"] = ""
+        return raw
 
     # Обработчик нажатия кнопки "Назад"
     def back_click(self, e):
