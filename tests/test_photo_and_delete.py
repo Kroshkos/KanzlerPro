@@ -102,3 +102,23 @@ def test_edit_page_keys_pattern(photo_env):
     cols = repo.get_student_columns()
     row2 = repo.get_student_full(sid)
     assert row2[cols.index("o_surname")] == "Новая"
+
+
+def test_migrate_legacy_base64(photo_env):
+    """Старые base64-значения в o_photo переносятся в файлы при миграции."""
+    import base64 as b64
+    _db, ps, repo = photo_env
+    sid = repo.add_student({"o_surname": "Старый", "o_name": "Ф", "о_lastname" if False else "o_lastname": "Ото"})
+    legacy = b64.b64encode(b"\x89PNG fake image bytes" * 10).decode()
+    assert ps.looks_like_base64(legacy)
+    _db.execute_query("UPDATE students SET o_photo = ? WHERE id = ?", params=(legacy, sid))
+    # до миграции photo_src отдаёт data-URI (обратная совместимость)
+    src_before = ps.photo_src(_db.execute_query("SELECT o_photo FROM students WHERE id=?", params=(sid,), fetch=True)[0]["o_photo"])
+    assert src_before and src_before.startswith("data:")
+    n = ps.migrate_legacy_base64()
+    assert n == 1
+    row = _db.execute_query("SELECT o_photo FROM students WHERE id = ?", params=(sid,), fetch=True)[0]
+    assert row["o_photo"] == f"{sid}.png"
+    assert os.path.exists(os.path.join(ps.PHOTOS_DIR, f"{sid}.png"))
+    # повторный вызов — no-op
+    assert ps.migrate_legacy_base64() == 0

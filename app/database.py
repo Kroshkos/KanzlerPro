@@ -1114,7 +1114,9 @@ def import_achievements_from_csv(filepath):
                             row[4] if len(row) > 4 else "",
                             row[5] if len(row) > 5 else "ms")
             added += 1
-        except Exception:
+        except Exception as e:
+            from utils_logger import log_except
+            log_except(f"database: импорт достижения строка {row[:2]}", e)
             continue
     return added
 

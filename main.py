@@ -32,6 +32,17 @@ def main(page: ft.Page):
     ensure_dirs()
     init_db()  # схема Kanzler + таблицы Дорожной карты (MKR) в одной базе
 
+    # Однократная миграция старых base64-фото из БД в файловое хранилище
+    # (no-op, если все записи уже перенесены).
+    try:
+        from photo_storage import migrate_legacy_base64
+        n = migrate_legacy_base64()
+        if n:
+            print(f"[photo_storage] перенесено base64-фото в файлы: {n}")
+    except Exception as e:
+        from utils_logger import log_except
+        log_except("main: миграция base64-фото", e)
+
     # ---------- Параметры окна ----------
     page.title = "Канцлер Про"
     page.window = ft.Window(

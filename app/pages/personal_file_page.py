@@ -480,7 +480,8 @@ class PersonalFilePage(ft.Column):
                                if x not in (None, ""))
                 out.append((sid, fio, str(r["o_group_name"] or ""),
                             str(r["o_course"] or "")))
-            except Exception:
+            except Exception as e:
+                log_except(f"personal_file_page: строка курсанта id={sid} в списке пакетной печати", e)
                 continue
         return out
 

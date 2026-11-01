@@ -52,6 +52,35 @@ def save_photo(raw_bytes: bytes, student_id: int, ext: str = "jpg") -> str:
     return filename
 
 
+def migrate_legacy_base64() -> int:
+    """Однократная миграция: переносит старые base64-фото из БД в файлы.
+
+    После миграции в колонке o_photo остаются только имена файлов — SELECT
+    больше не тянет мегабайты base64 на каждую строку, а photo_src() не
+    декодирует base64 на каждый показ. Повторный вызов безопасен (no-op).
+    Возвращает количество перенесённых записей.
+    """
+    from database import execute_query  # ленивый импорт: без цикличной зависимости
+    migrated = 0
+    rows = execute_query("SELECT id, o_photo FROM students", fetch=True) or []
+    for r in rows:
+        value = (r["o_photo"] if isinstance(r, dict) else r[1]) or ""
+        if not looks_like_base64(value):
+            continue
+        try:
+            raw = base64.b64decode(value.strip())
+            sid = int(r["id"] if isinstance(r, dict) else r[0])
+            filename = save_photo(raw, sid, ext="png")
+            if filename:
+                execute_query("UPDATE students SET o_photo = ? WHERE id = ?",
+                              params=(filename, sid))
+                migrated += 1
+        except (binascii.Error, ValueError) as e:
+            from utils_logger import log_except
+            log_except(f"photo_storage: миграция base64 id={r[0] if isinstance(r, dict) else r['id']}", e)
+    return migrated
+
+
 def delete_photo(filename: str) -> None:
     """Удалить файл фото из хранилища (при удалении курсанта).
 
