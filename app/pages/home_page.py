@@ -149,7 +149,16 @@ class KantslerApp(ft.Column):
         return to_num(value, default)
 
     def _page_width(self):
-        return int(self._num(getattr(self._fpage, "width", None), 1200) or 1200)
+        # Приоритет: актуальные метрики страницы (заполняет рантайм Flet),
+        # затем последнее событие ресайза, затем дефолт. Все значения
+        # приводятся к числу — из протокола они могут прийти строкой.
+        w = to_num(getattr(self._fpage, "width", None), None)
+        if w is not None and w > 0:
+            return int(w)
+        w = getattr(self, "_last_width", None)
+        if w:
+            return int(w)
+        return 1200
 
     def _sidebar_mode(self):
         w = self._page_width()
@@ -172,14 +181,22 @@ class KantslerApp(ft.Column):
         return max(w - self._panel_width() - 2, 320)
 
     def _on_resize(self, e):
-        # Источник истины — событие ресайза (ширина может прийти строкой)
+        # ВАЖНО: page.width/page.height в Flet 1.x — read-only поля, их
+        # заполняет рантайм. Присваивать им нельзя (в том числе значения из
+        # события ресайза). Ширина окна для адаптивной раскладки берётся из
+        # метрик страницы; если они ещё не получены — из события (тоже с
+        # безопасным приведением строки к числу).
         try:
-            ew = getattr(e, "width", None)
-            if ew is not None:
-                self._fpage.width = self._num(ew, None)
-            eh = getattr(e, "height", None)
-            if eh is not None:
-                self._fpage.height = self._num(eh, None)
+            pw = to_num(getattr(self._fpage, "width", None), None)
+            if pw is None or pw <= 0:
+                pw = to_num(getattr(e, "width", None), None)
+            if pw and pw > 0:
+                self._last_width = float(pw)
+            ph = to_num(getattr(self._fpage, "height", None), None)
+            if ph is None or ph <= 0:
+                ph = to_num(getattr(e, "height", None), None)
+            if ph and ph > 0:
+                self._last_height = float(ph)
         except Exception:
             pass
         mode = self._sidebar_mode()
