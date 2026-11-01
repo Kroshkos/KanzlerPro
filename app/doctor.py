@@ -152,7 +152,17 @@ def run_checks():
 
 
 def main(argv=None):
+    """Точка входа: коды выхода 0 — OK, 1 — найдены проблемы.
+
+    Флаг ``--no-backups`` (используется в CI, пункт T-4) понижает
+    «нет свежих резервных копий» из ошибки в предупреждение: в CI база
+    создаётся с нуля и бэкапы там не генерируются намеренно.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    ignore_backups = "--no-backups" in argv
     problems = run_checks()
+    if ignore_backups and "backups-dir" in problems:
+        problems.remove("backups-dir")
     return 1 if problems else 0
 
 
