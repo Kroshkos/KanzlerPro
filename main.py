@@ -24,12 +24,22 @@ if APP_DIR not in sys.path:
 
 import flet as ft
 from config import ensure_dirs
-from database import init_db
+from database import backup_database, init_db
 
 
 def main(page: ft.Page):
     ensure_dirs()
-    init_db()  # схема Kanzler + таблицы Дорожной карты (MKR) в одной базе
+    init_db()  # схема Kanzler + таблицы MKR (Дорожной карты) в одной базе
+
+    # Резервная копия БД при каждом запуске (BACKLOG A-4): «горячий»
+    # sqlite-backup в data/backups с ротацией последних копий.
+    try:
+        copy_path = backup_database()
+        if copy_path:
+            print(f"[Канцлер] резервная копия БД: {copy_path}")
+    except Exception as e:
+        from utils_logger import log_except
+        log_except("main: резервное копирование БД", e)
 
     # Однократная миграция старых base64-фото из БД в файловое хранилище
     # (no-op, если все записи уже перенесены).

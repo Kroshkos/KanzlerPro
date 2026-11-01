@@ -13,4 +13,6 @@ python -m pytest -q       # тесты слоя БД/безопасности
   `KANZLER_ADMIN_PASSWORD` (пароль админа при первой инициализации).
 - Секреты (пароли, токены) запрещены в коде и истории git.
 - Перед коммитом прогоните `python -m pytest -q`.
+- Хуки: `pip install pre-commit && pre-commit install` — ruff и compileall
+  автоматически перед каждым коммитом (конфиг `.pre-commit-config.yaml`).
 - Новые SQL-запросы — только параметризованные (`?`), без f-строк со значениями.

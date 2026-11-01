@@ -1,12 +1,14 @@
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from access import require_role
 
 # Абсолютный путь к файлу базы данных (не зависит от текущей директории,
 # из которой запущено приложение — раньше БД «терялась» при запуске из другой папки)
 from config import DB_PATH  # единая база приложения kanzler_pro.db
-from constants import ADMIN_ROLE, DEFAULT_ROLE
+from constants import ADMIN_ROLE, DEFAULT_ROLE, ROLES
 from security import hash_password, needs_migration, verify_password
 from utils_logger import log_except
 
@@ -43,9 +45,17 @@ def ensure_column(table, column, decl="TEXT"):
 
 
 # Подключение к базе данных SQLite
+def _lower_unicode(s):
+    """Регистронезависимость для кириллицы: встроенный LOWER() SQLite
+    работает только по ASCII ('Иванов' -> 'Иванов'), из-за чего поиск по
+    фамилии в нижнем регистре не находил записи с заглавной буквы."""
+    return (s or "").lower()
+
+
 def connect_to_db():
     conn = sqlite3.connect(DB_PATH)  # Файл базы данных
     conn.execute("PRAGMA foreign_keys = ON")  # включаем контроль внешних ключей
+    conn.create_function("LOWER_UNICODE", 1, _lower_unicode, deterministic=True)
     return conn
 
 # Функция для выполнения SQL-запросов
@@ -58,6 +68,12 @@ def execute_query(query, params=None, fetch=False):
     cursor.execute(query, params or ())
     if fetch:
         result = cursor.fetchall()
+        # ВАЖНО: fetch=True раньше пропускал commit(). Для запросов вида
+        # «INSERT ... RETURNING» это означало незакоммиченную транзакцию:
+        # строка не попадала в файл БД, а conn.close() откатывал её, из-за
+        # чего последующие вставки с FK падали с "FOREIGN KEY constraint
+        # failed". Читающие SELECT коммит безвреден, поэтому коммитим всегда.
+        conn.commit()
     else:
         conn.commit()
         result = None
@@ -191,7 +207,11 @@ def init_db():
     );
     """
     execute_query(query_students)
-    init_mkr_tables()  # таблицы Дорожной карты (MKR) в той же базе
+
+    # ВАЖНО: init_mkr_tables() вызывается ПОСЛЕ создания всех базовых таблиц
+    # (см. конец init_db). Внутри него есть миграция _ensure_lockout_columns(),
+    # которая делает ALTER TABLE users — до создания таблицы users это падало
+    # с «no such table: users».
 
     # Обновленная таблица users с полем role
     query_users = """
@@ -306,6 +326,10 @@ def init_db():
     # Миграция схемы: доводим старые файлы БД к актуальному списку полей.
     migrate_schema()
 
+    # Таблицы Дорожной карты (MKR) в той же базе. Вызывается ПОСЛЕ создания
+    # таблицы users, т.к. внутри выполняется миграция _ensure_lockout_columns.
+    init_mkr_tables()
+
     # Добавление администратора по умолчанию (если его нет).
     # Пароль задаётся переменной окружения KANZLER_ADMIN_PASSWORD,
     # иначе генерируется случайный и выводится один раз при создании.
@@ -318,49 +342,211 @@ def init_db():
             print("[Канцлер] Создан пользователь 'admin'. "
                   f"Задайте свой пароль через меню 'Пользователи' или переменную "
                   f"KANZLER_ADMIN_PASSWORD. Временный пароль: {admin_password}")
-        add_user("admin", admin_password, ADMIN_ROLE)
+        add_user("admin", admin_password, ADMIN_ROLE, actor_role=ADMIN_ROLE)
 
 # Логирование действия
 def log_action(username, action):
+    """Запись в журнал действий с хеш-цепочкой (BACKLOG B-5).
+
+    Каждая строка хранит hash своей записи и hash предыдущей строки
+    (prev_hash), что делает журнал обнаруживаемо-изменяемым: правка или
+    удаление строки задним числом разрывает цепочку. Проверка целостности
+    — verify_logs_chain(). Для старых записей без хешей вычисление
+    выполняется по той же схеме (timestamp|username|action), поэтому
+    миграция не требуется — колонки добавляются в migrate_schema().
+    """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    query = "INSERT INTO logs (timestamp, username, action) VALUES (?, ?, ?)"
-    execute_query(query, (timestamp, username, action))
+    prev = execute_query(
+        "SELECT row_hash FROM logs ORDER BY id DESC LIMIT 1", fetch=True)
+    prev_hash = prev[0]["row_hash"] if prev and prev[0]["row_hash"] else ""
+    row_hash = _log_row_hash(timestamp, username, action, prev_hash)
+    query = ("INSERT INTO logs (timestamp, username, action, prev_hash, row_hash)"
+             " VALUES (?, ?, ?, ?, ?)")
+    execute_query(query, (timestamp, username, action, prev_hash, row_hash))
+
+
+def _log_row_hash(timestamp, username, action, prev_hash):
+    import hashlib
+    payload = f"{prev_hash}|{timestamp}|{username}|{action}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def verify_logs_chain():
+    """Проверяет хеш-цепочку журнала. Возвращает список проблемных id.
+
+    Пустой список = журнал не изменялся извне. Строки без row_hash
+    (созданные до включения цепочки) пересчитываются на лету; первая
+    такая строка сравнивается по «нулевому» prev_hash, последующие —
+    только если у них тоже нет сохранённых хешей (иначе цепочка уже
+    оборвана и это будет показано отдельно).
+    """
+    rows = execute_query(
+        "SELECT id, timestamp, username, action, prev_hash, row_hash"
+        " FROM logs ORDER BY id", fetch=True) or []
+    problems = []
+    prev_hash = ""
+    for r in rows:
+        stored = r["row_hash"]
+        if stored is None or stored == "":
+            # легаси-запись: ожидаем пустые хеши в БД, пересчёт невозможный
+            if r["prev_hash"] not in (None, ""):
+                problems.append(r["id"])
+            prev_hash = ""
+            continue
+        expected = _log_row_hash(r["timestamp"], r["username"],
+                                 r["action"], prev_hash)
+        if stored != expected or (r["prev_hash"] or "") != prev_hash:
+            problems.append(r["id"])
+        prev_hash = stored
+    return problems
+
+
+# ---------- Политика паролей и защита от перебора (BACKLOG B-2) ----------
+
+MIN_PASSWORD_LENGTH = 8      # минимальная длина пароля
+MAX_FAILED_ATTEMPTS = 5      # неудачных попыток подряд до блокировки
+LOCKOUT_MINUTES = 15         # длительность временной блокировки учётки
+
+
+class PasswordPolicyError(ValueError):
+    """Пароль не удовлетворяет политике безопасности."""
+
+
+class AccountLockedError(Exception):
+    """Учётка временно заблокирована из-за серии неудачных попыток входа."""
+
+
+def validate_password_strength(password):
+    """Проверяет пароль по политике (B-2); бросает PasswordPolicyError.
+
+    Возвращает нормализованную строку пароля (без обрамляющих пробелов).
+    Правила намерено минимальные: пустой пароль запрещён, длина не менее
+    MIN_PASSWORD_LENGTH символов.
+    """
+    pwd = (password or "").strip()
+    if len(pwd) < MIN_PASSWORD_LENGTH:
+        raise PasswordPolicyError(
+            f"Пароль должен содержать не менее {MIN_PASSWORD_LENGTH} символов")
+    return pwd
+
+
+def _ensure_lockout_columns():
+    """Идемпотентно добавляет колонки счётчика перебора в таблицу users."""
+    ensure_column("users", "failed_attempts", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column("users", "locked_until", "TEXT")
+
+
+def _lockout_active(locked_until):
+    """True, если метка блокировки ещё не истекла."""
+    if not locked_until:
+        return False
+    try:
+        until = datetime.strptime(str(locked_until)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return datetime.now() < until
+
+
+def register_failed_attempt(user_id):
+    """Увеличивает счётчик неудачных попыток; при достижении лимита — блокирует."""
+    _ensure_lockout_columns()
+    now = datetime.now()
+    rows = execute_query(
+        "SELECT COALESCE(failed_attempts, 0) AS fa FROM users WHERE id = ?",
+        (user_id,), fetch=True)
+    attempts = int(rows[0]["fa"]) + 1 if rows else 1
+    if attempts >= MAX_FAILED_ATTEMPTS:
+        locked_until = (now + timedelta(minutes=LOCKOUT_MINUTES)
+                        ).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+        execute_query(
+            "UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?",
+            (attempts, locked_until, user_id))
+    else:
+        execute_query(
+            "UPDATE users SET failed_attempts = ?, locked_until = NULL WHERE id = ?",
+            (attempts, user_id))
+    return attempts
+
+
+def reset_failed_attempts(user_id):
+    """Сбрасывает счётчик перебора после успешного входа."""
+    _ensure_lockout_columns()
+    execute_query(
+        "UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?",
+        (user_id,))
+
 
 # Проверка пользователя с возвратом роли
 # Возвращает список кортежей (id, username, role) либо None, если пользователь не найден.
 # Пароли хранятся в виде PBKDF2-хешей; устаревшие открытые пароли
 # прозрачно мигрируются в хеши при первой успешной авторизации.
+# Защита от перебора (B-2): MAX_FAILED_ATTEMPTS неудачных попыток подряд
+# временно блокируют учётку (locked_until в таблице users).
 def check_user(username, password):
+    _ensure_lockout_columns()
     rows = execute_query(
-        "SELECT id, username, role, password FROM users WHERE username = ?",
+        "SELECT id, username, role, password, "
+        "COALESCE(failed_attempts, 0) AS failed_attempts, locked_until "
+        "FROM users WHERE username = ?",
         (username,), fetch=True)
     if not rows:
         return None
-    user_id, db_username, role, stored_password = rows[0]
+    user_id, db_username, role, stored_password = rows[0][:4]
+    if _lockout_active(rows[0]["locked_until"]):
+        raise AccountLockedError(
+            f"Учётка заблокирована на {LOCKOUT_MINUTES} мин после "
+            f"{MAX_FAILED_ATTEMPTS} неудачных попыток входа")
     if not verify_password(password, stored_password):
+        attempts = register_failed_attempt(user_id)
+        # 5-я подряд ошибка ставит метку locked_until — отказ уже со
+        # следующей попытки (проверка выше). Здесь повторяем текст
+        # блокировки, чтобы UI мог показать его сразу, без «шестого клика».
+        if attempts >= MAX_FAILED_ATTEMPTS:
+            raise AccountLockedError(
+                f"Учётка заблокирована на {LOCKOUT_MINUTES} мин после "
+                f"{MAX_FAILED_ATTEMPTS} неудачных попыток входа")
         return None
     if needs_migration(stored_password):
         execute_query("UPDATE users SET password = ? WHERE id = ?",
                       (hash_password(password), user_id))
+    reset_failed_attempts(user_id)
     return [(user_id, db_username, role)]
 
-# Добавление нового пользователя (пароль сохраняется только как хеш)
-def add_user(username, password, role=DEFAULT_ROLE):
+# Добавление нового пользователя (пароль сохраняется только как хеш).
+# Пустой пароль разрешён только для служебной первичной записи 'admin'
+# (случайный пароль из main.py генерируется вне этой функции);
+# пользовательские пароли проходят политику длины (B-2).
+# actor_role — роль инициатора (B-1): мутация требует права администратора;
+# None — легаси-вызов без сессии (переходный режим access.ALLOW_UNSCOPED).
+def add_user(username, password, role=DEFAULT_ROLE, actor_role=None):
+    require_role(actor_role, ADMIN_ROLE, action="создание пользователя")
+    pwd = (password or "").strip()
+    if pwd:
+        pwd = validate_password_strength(pwd)
+    elif username != "admin":
+        raise PasswordPolicyError(
+            f"Пароль должен содержать не менее {MIN_PASSWORD_LENGTH} символов")
     query = "INSERT INTO users (username, password, role) VALUES (?, ?, ?)"
-    execute_query(query, (username, hash_password(password), role))
+    execute_query(query, (username, hash_password(pwd), role))
 
-# Смена пароля пользователя
-def update_user_password(user_id, new_password):
+# Смена пароля пользователя (новая запись проходит политику B-2)
+def update_user_password(user_id, new_password, actor_role=None):
+    require_role(actor_role, ADMIN_ROLE, action="смена пароля пользователя")
+    pwd = validate_password_strength(new_password)
     query = "UPDATE users SET password = ? WHERE id = ?"
-    execute_query(query, (hash_password(new_password), user_id))
+    execute_query(query, (hash_password(pwd), user_id))
 
 # Удаление пользователя
-def delete_user(user_id):
+def delete_user(user_id, actor_role=None):
+    require_role(actor_role, ADMIN_ROLE, action="удаление пользователя")
     query = "DELETE FROM users WHERE id = ?"
     execute_query(query, (user_id,))
 
-# Изменение роли пользователя
-def update_user_role(user_id, new_role):
+# Изменение роли пользователя (роль — только из белого списка constants.ROLES)
+def update_user_role(user_id, new_role, actor_role=None):
+    require_role(actor_role, ADMIN_ROLE, action="смена роли пользователя")
+    if new_role not in ROLES:
+        raise ValueError(f"Недопустимая роль: {new_role!r}")
     query = "UPDATE users SET role = ? WHERE id = ?"
     execute_query(query, (new_role, user_id))
 
@@ -513,12 +699,68 @@ def migrate_schema():
     for field in STUDENT_FIELDS:
         if ensure_column("students", field):
             added.append(field)
+    # B-2: защита от перебора — счётчик неудачных попыток и метка блокировки
+    for col, decl in (("failed_attempts", "INTEGER NOT NULL DEFAULT 0"),
+                      ("locked_until", "TEXT")):
+        if ensure_column("users", col, decl):
+            added.append(col)
+    # B-5: хеш-цепочка журнала (старые строки остаются с NULL-хешами)
+    for col, decl in (("prev_hash", "TEXT"), ("row_hash", "TEXT")):
+        if ensure_column("logs", col, decl):
+            added.append(col)
     if added:
-        print(f"[Канцлер] Миграция схемы: добавлено колонок в students: {len(added)}")
+        print("[Канцлер] Миграция схемы: добавлено колонок: "
+              f"{len(added)} (students/users/logs)")
     return added
 
 
-def update_student(student_id, student_data):
+# ---------- Резервное копирование БД (BACKLOG A-4) ----------
+
+BACKUP_KEEP = 10  # сколько последних копий хранить в data/backups
+
+
+def backup_database(db_path=None, backups_dir=None, keep=BACKUP_KEEP):
+    """Копирует файл БД в каталог резервных копий с ротацией.
+
+    Имя копии: kanzler_pro_YYYYMMDD_HHMMSS.db. Хранятся только `keep`
+    последних файлов (старые удаляются). Используется sqlite3 «горячий»
+    backup API — копия консистентна даже при открытом соединении.
+
+    Возвращает путь к созданной копии или None, если исходный файл
+    отсутствует (БД ещё не создана — копировать нечего).
+    """
+    import glob
+
+    from config import DATA_DIR
+
+    db_path = db_path or DB_PATH
+    if not os.path.exists(db_path):
+        return None
+    backups_dir = backups_dir or os.path.join(DATA_DIR, "backups")
+    os.makedirs(backups_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = os.path.splitext(os.path.basename(db_path))[0]
+    dest = os.path.join(backups_dir, f"{base}_{stamp}.db")
+    src = sqlite3.connect(db_path)
+    dst = sqlite3.connect(dest)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    # Ротация: оставляем `keep` самых свежих копий (сортировка по имени —
+    # метка времени в формате YYYYMMDD_HHMMSS лексикографически совпадает
+    # с хронологическим порядком).
+    pattern = os.path.join(glob.escape(backups_dir), f"{glob.escape(base)}_*.db")
+    for old in sorted(glob.glob(pattern))[:-keep]:
+        try:
+            os.remove(old)
+        except OSError:
+            log_except(f"database: ротация бэкапа {old}")
+    return dest
+
+
+def update_student(student_id, student_data, actor_role=None):
     """Обновляет личное дело курсанта.
 
     Обновляются только те поля из STUDENT_FIELDS, которые присутствуют в
@@ -526,6 +768,8 @@ def update_student(student_id, student_data):
     списка STUDENT_FIELDS — произвольные строки в SQL не попадают.
     Возвращает True, если запись найдена и обновлена.
     """
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, DEFAULT_ROLE, action="update_student")
     fields = [f for f in STUDENT_FIELDS if f in student_data]
     if not fields:
         return False
@@ -544,7 +788,9 @@ def update_student(student_id, student_data):
         conn.close()
 
 
-def add_student(student_data):
+def add_student(student_data, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_student")
     conn = connect_to_db()  # Открываем соединение с базой данных
     cursor = conn.cursor()  # Создаем курсор
 
@@ -850,9 +1096,25 @@ def add_student(student_data):
 # которое переопределяло корректную версию выше (см. строку ~272) и ломало
 # авторизацию. Дубликат удалён.
 
-def get_students():
-    query = "SELECT id, o_surname, o_name, o_lastname, o_course, o_group_name FROM students"
-    return execute_query(query, fetch=True)
+STUDENTS_PAGE_SIZE = 50
+
+
+def count_students() -> int:
+    """Всего курсантов в базе (для расчёта числа страниц пагинации, C-1)."""
+    rows = execute_query("SELECT COUNT(*) AS c FROM students", fetch=True)
+    return int(rows[0]["c"]) if rows else 0
+
+
+def get_students(limit=None, offset=0):
+    """Список курсантов. limit=None — все записи (обратная совместимость),
+    иначе — страница размером limit со смещением offset (пагинация, C-1)."""
+    query = ("SELECT id, o_surname, o_name, o_lastname, o_course, o_group_name "
+             "FROM students ORDER BY id")
+    params = ()
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params = (int(limit), int(offset))
+    return execute_query(query, params=params, fetch=True)
 
 
 # --- Глобальный поиск: выборки всех записей с ФИО (для app/global_search.py).
@@ -907,7 +1169,10 @@ def search_all_reviews():
 
 
 # Добавление поощрения
-def add_encouragement(student_id, encouragement_type, reason, issued_by, date_obj, order_number):
+def add_encouragement(student_id, encouragement_type, reason, issued_by, date_obj, order_number,
+                      actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_encouragement")
     query = """
     INSERT INTO encouragements (student_id, encouragement_type, reason, issued_by, date, order_number)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -923,7 +1188,10 @@ def get_encouragements_by_student(student_id):
     return execute_query(query, (student_id,), fetch=True)
 
 # Добавление взыскания
-def add_penalty(student_id, penalty_type, reason, date_reason, issued_by, date_obj, order_number):
+def add_penalty(student_id, penalty_type, reason, date_reason, issued_by, date_obj, order_number,
+                actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_penalty")
     query = """
     INSERT INTO penalties (student_id, penalty_type, reason, date_reason, issued_by, date, order_number)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -939,12 +1207,20 @@ def get_penalties_by_student(student_id):
     return execute_query(query, (student_id,), fetch=True)
 
 def search_students_by_name_part(name_part):
+    """Поиск курсантов по части ФИО.
+
+    Регистронезависимый (LOWER_UNICODE — см. connect_to_db): раньше поиск
+    «иван» не находил «Иванов», потому что LOWER() SQLite работает только
+    по ASCII. Условие нормализуется на стороне Python, колонка — в SQL.
+    """
     query = """
     SELECT id, o_surname, o_name, o_lastname FROM students
-    WHERE o_surname LIKE ? OR o_name LIKE ? OR o_lastname LIKE ?
+    WHERE LOWER_UNICODE(o_surname) LIKE ?
+       OR LOWER_UNICODE(o_name) LIKE ?
+       OR LOWER_UNICODE(o_lastname) LIKE ?
     """
-    name_part = f"%{name_part}%"  # Добавляем % для поиска по части строки
-    return execute_query(query, (name_part, name_part, name_part), fetch=True)
+    part = f"%{(name_part or '').strip().lower()}%"
+    return execute_query(query, (part, part, part), fetch=True)
 
 def get_subjects_by_name_part(name_part):
     query = "SELECT id, subject_name FROM subjects WHERE subject_name LIKE ?"
@@ -1035,6 +1311,12 @@ MKR_TABLES_SQL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_rr_student ON roadmap_reviews(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_rr_status ON roadmap_reviews(status)",
+    # C-2: индексы под частые фильтры (поиск по ФИО — префикс, выборки по
+    # группе/курсу из списка курсантов и фильтра поиска). Колонки с префиксом
+    # o_ — исторические имена схемы таблицы students.
+    "CREATE INDEX IF NOT EXISTS idx_students_surname ON students(o_surname)",
+    "CREATE INDEX IF NOT EXISTS idx_students_group ON students(o_group_name)",
+    "CREATE INDEX IF NOT EXISTS idx_students_course ON students(o_course)",
 ]
 
 
@@ -1047,6 +1329,8 @@ def init_mkr_tables():
     # всегда падал в except. Колонка добавляется один раз; значение по
     # умолчанию для новых записей проставляет add_review.
     ensure_column("roadmap_reviews", "created_at", "DATETIME")
+    # B-2: счётчик перебора и метка блокировки учётки (для старых файлов БД)
+    _ensure_lockout_columns()
 
 
 # Названия блоков достижений (справочник Road Map)
@@ -1066,14 +1350,19 @@ def get_blocks():
     return sorted(BLOCK_NAMES.items())
 
 
-def add_achievement(ach_id, block, name, points, version="", calc_type="ms"):
+def add_achievement(ach_id, block, name, points, version="", calc_type="ms",
+                    actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_achievement")
     execute_query(
         "INSERT OR REPLACE INTO achievements_catalog "
         "(id, block, name, points, version, calc_type) VALUES (?, ?, ?, ?, ?, ?)",
         (str(ach_id), int(block), name, int(points), version, calc_type))
 
 
-def delete_achievement(ach_id):
+def delete_achievement(ach_id, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="delete_achievement")
     execute_query("DELETE FROM achievements_catalog WHERE id = ?", (str(ach_id),))
 
 
@@ -1096,8 +1385,10 @@ def count_achievements():
     return rows[0]["c"] if rows else 0
 
 
-def import_achievements_from_csv(filepath):
+def import_achievements_from_csv(filepath, actor_role=None):
     """Импорт справочника достижений из CSV (формат наследия MKR)."""
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="import_achievements_from_csv")
     import csv as _csv
     added = 0
     with open(filepath, "r", encoding="utf-8-sig", newline="") as f:
@@ -1124,7 +1415,18 @@ def import_achievements_from_csv(filepath):
 def calculate_final_points(calc_type, base_points, k_ur=1.0, k_role=1.0,
                            k_vn=1.0, k_st=1.0, duration_months=0,
                            grant_amount=0, ip_bonus=0):
-    """Расчёт итоговых баллов по формуле из MKR."""
+    """Расчёт итоговых баллов по формуле из MKR (финансовые данные — T-3).
+
+    Формула: base * k_ur * k_role * k_vn * k_st (+ бонус за ИПР); для
+    типа 'month' база дополнительно умножается на число месяцев.
+    Особые случаи (закреплены табличными тестами test_points_premia.py):
+      * 'avg_score' — баллы без коэффициентов (средний балл сам по себе);
+      * 'grant'     — берётся сумма гранта, базовые баллы игнорируются;
+      * duration_months <= 0 или None — как один месяц (иначе нулевой
+        срок обнулял бы весь расчёт);
+      * любые None-коэффициенты трактуются как 1.0, None-числа как 0.
+    Результат округляется до целого (banker's rounding встроен round()).
+    """
     base = int(base_points or 0)
     if calc_type == "avg_score":
         return base
@@ -1194,7 +1496,10 @@ def get_recent_pending_reviews(limit=10):
 
 def add_review(student_id, achievement_id, semester, status="pending",
                confirmation_file="", comment=None, k_ur=1.0, k_role=1.0,
-               k_vn=1.0, k_st=1.0, duration_months=0, grant_amount=0, ip_bonus=0):
+               k_vn=1.0, k_st=1.0, duration_months=0, grant_amount=0, ip_bonus=0,
+               actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_review")
     ach = execute_query(
         "SELECT points, calc_type FROM achievements_catalog WHERE id = ?",
         (str(achievement_id),), fetch=True)
@@ -1215,7 +1520,9 @@ def add_review(student_id, achievement_id, semester, status="pending",
          duration_months, grant_amount, ip_bonus, now))
 
 
-def update_review(review_id, status, comment=None, final_points=None):
+def update_review(review_id, status, comment=None, final_points=None, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="update_review")
     execute_query(
         """UPDATE roadmap_reviews SET status = ?, expert_comment = ?,
            reviewed_at = ?, final_points = ? WHERE id = ?""",
@@ -1223,7 +1530,9 @@ def update_review(review_id, status, comment=None, final_points=None):
          final_points, review_id))
 
 
-def delete_review(review_id):
+def delete_review(review_id, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="delete_review")
     execute_query("DELETE FROM roadmap_reviews WHERE id = ?", (review_id,))
 
 
@@ -1263,7 +1572,9 @@ def get_student_total_points(student_id, semester=None):
 
 
 def save_individual_plan(student_id, semester, plan_text, status="draft",
-                         approved_by=None):
+                         approved_by=None, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="save_individual_plan")
     existing = execute_query(
         "SELECT id FROM individual_plans WHERE student_id = ? AND semester = ?",
         (student_id, int(semester)), fetch=True)
@@ -1287,7 +1598,10 @@ def get_individual_plan(student_id, semester):
     return rows[0] if rows else None
 
 
-def set_semester_status(student_id, semester, is_candidate=None, is_resident=None):
+def set_semester_status(student_id, semester, is_candidate=None, is_resident=None,
+                        actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="set_semester_status")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cur = get_semester_status(student_id, semester)
     cand = int(bool(is_candidate)) if is_candidate is not None else (cur["is_candidate"] if cur else 0)
@@ -1314,7 +1628,10 @@ def get_semester_status(student_id, semester):
     return rows[0] if rows else None
 
 
-def add_manual_score(student_id, semester, block, score, comment=""):
+def add_manual_score(student_id, semester, block, score, comment="",
+                     actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_manual_score")
     execute_query(
         "INSERT INTO manual_scores (student_id, semester, block, score, comment) "
         "VALUES (?,?,?,?,?)",
@@ -1336,11 +1653,15 @@ def get_manual_scores(student_id=None, semester=None):
     return execute_query(query, tuple(params), fetch=True)
 
 
-def delete_manual_score(score_id):
+def delete_manual_score(score_id, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="delete_manual_score")
     execute_query("DELETE FROM manual_scores WHERE id = ?", (score_id,))
 
 
-def set_semester_average(student_id, semester, average_score):
+def set_semester_average(student_id, semester, average_score, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="set_semester_average")
     execute_query(
         """INSERT INTO semester_averages (student_id, semester, average_score)
            VALUES (?,?,?)

@@ -104,3 +104,59 @@ class TestMapSessionResults:
         s = _student(db, "Недопущенный")
         self._grade(db, s, "Право", "н/д", allowance="Не допущен")
         assert s in repo.map_failed_subjects([s])
+
+
+class TestSearchStudentsLike:
+    """A-1: расширенный поиск курсантов живёт в репозитории (SQL вне UI)."""
+
+    def _seed(self, db):
+        db.execute_query(
+            "INSERT INTO students (o_surname, o_name, o_lastname, o_course, o_group_name)"
+            " VALUES ('Иванов','Иван','Иванович',3,'А-12')")
+        db.execute_query(
+            "INSERT INTO students (o_surname, o_name, o_lastname, o_course, o_group_name)"
+            " VALUES ('Петров','Пётр','Сергеевич',4,'Б-31')")
+
+    def test_partial_surname_match(self, db, repo):
+        self._seed(db)
+        rows = repo.search_students_like(surname="иван")
+        assert len(rows) == 1
+        assert rows[0]["o_surname"] == "Иванов"
+
+    def test_exact_numeric_fields(self, db, repo):
+        self._seed(db)
+        rows = repo.search_students_like(course=4)
+        assert [r["o_surname"] for r in rows] == ["Петров"]
+
+    def test_combined_filters_and_empty_kwargs(self, db, repo):
+        self._seed(db)
+        assert repo.search_students_like() and len(repo.search_students_like()) == 2
+        assert repo.search_students_like(surname="пет", group_name="б-")
+        assert not repo.search_students_like(surname="пет", course=3)
+
+    def test_no_sql_injection_via_params(self, db, repo):
+        self._seed(db)
+        # значение с кавычкой должно искаться как текст, а не ломать запрос
+        assert repo.search_students_like(surname="Ив'AN; DROP TABLE students;--") == []
+        assert len(repo.search_students_like()) == 2
+
+
+class TestCyrillicCaseInsensitiveSearch:
+    """LOWER() SQLite работает только по ASCII — «иван» не находил «Иванов».
+    LOWER_UNICODE (database.connect_to_db) чинит это во всех поисках."""
+
+    def _seed(self, db):
+        db.execute_query(
+            "INSERT INTO students (o_surname, o_name, o_lastname, o_course, o_group_name)"
+            " VALUES ('Иванов','Иван','Иванович',3,'А-12')")
+
+    def test_name_part_search_lowercase_query(self, db):
+        self._seed(db)
+        assert [r[1] for r in db.search_students_by_name_part("иван")] == ["Иванов"]
+        assert [r[1] for r in db.search_students_by_name_part("ИВАН")] == ["Иванов"]
+        assert db.search_students_by_name_part("неттакого") == []
+
+    def test_repo_search_matches_name_part(self, db, repo):
+        self._seed(db)
+        rows = repo.search_students_like(surname="иваНов")   # любой регистр
+        assert len(rows) == 1

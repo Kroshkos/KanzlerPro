@@ -19,6 +19,8 @@ allowance и т.д.).
 """
 
 
+from access import require_role
+from constants import ADMIN_ROLE
 from database import execute_query
 
 Row = tuple
@@ -28,8 +30,13 @@ Row = tuple
 
 
 def add_position(student_id: int, position: str, assigned_by: str,
-                 date_str: str, order_number: str) -> None:
-    """Добавляет запись об изменении должности."""
+                 date_str: str, order_number: str,
+                 actor_role=None) -> None:
+    """Добавляет запись об изменении должности.
+
+    B-1: серверная проверка прав — мутация доступна только администратору.
+    """
+    require_role(actor_role, ADMIN_ROLE, action="добавление должности")
     execute_query(
         """INSERT INTO position_history
            (student_id, position, assigned_by, date, order_number)
@@ -51,8 +58,13 @@ def get_position_history(student_id: int) -> list[Row]:
 
 
 def add_rank(student_id: int, rank: str, assigned_by: str,
-             date_str: str, order_number: str) -> None:
-    """Добавляет запись об изменении воинского звания."""
+             date_str: str, order_number: str,
+             actor_role=None) -> None:
+    """Добавляет запись об изменении воинского звания.
+
+    B-1: серверная проверка прав — мутация доступна только администратору.
+    """
+    require_role(actor_role, ADMIN_ROLE, action="добавление звания")
     execute_query(
         """INSERT INTO rank_history
            (student_id, rank, assigned_by, date, order_number)
@@ -350,11 +362,12 @@ def get_student_full(student_id: int) -> Row | None:
     return rows[0] if rows else None
 
 
-def update_student_fields(student_id: int, fields: dict) -> bool:
+def update_student_fields(student_id: int, fields: dict,
+                          actor_role=None) -> bool:
     """Частичное обновление личного дела через белый список STUDENT_FIELDS."""
     from database import update_student
 
-    return update_student(student_id, fields)
+    return update_student(student_id, fields, actor_role=actor_role)
 
 
 def get_student_columns() -> list:
@@ -367,7 +380,7 @@ def get_student_columns() -> list:
     return [r[1] for r in rows]
 
 
-def add_student(student_data: dict) -> int:
+def add_student(student_data: dict, actor_role=None) -> int:
     """Создать курсанта по плоскому dict колонок students.
 
     Тонкая обёртка над database.add_student(): INSERT со строго параметризованным
@@ -377,17 +390,23 @@ def add_student(student_data: dict) -> int:
     """
     from database import add_student as _db_add_student
 
-    return _db_add_student(student_data)
+    return _db_add_student(student_data, actor_role=actor_role)
 
 
-def delete_student(student_id: int) -> bool:
+def delete_student(student_id: int, actor_role=None) -> bool:
     """Полностью удалить курсанта и связанные записи (каскад вручную).
 
     Используется там, где нужен РЕАЛЬНЫЙ DELETE (например, отклонённая заявка
     с status="deleted"), а не мягкое удаление флагом. Дочерние таблицы без FK-
     каскада чистятся явно, чтобы не оставлять сиротские строки. Файл фото —
     через photo_storage.delete_photo() (вызывающая сторона передаёт o_photo).
+
+    B-1: серверная проверка прав — удаление доступно только администратору.
     """
+    from access import require_role
+    from constants import ADMIN_ROLE
+
+    require_role(actor_role, ADMIN_ROLE, action="удаление курсанта")
     from database import connect_to_db
 
     conn = connect_to_db()
@@ -410,3 +429,46 @@ def delete_student(student_id: int) -> bool:
     finally:
         cursor.close()
         conn.close()
+
+
+# --- A-1: SQL из страниц в репозитории ------------------------------------
+
+# Поля расширенного поиска курсантов: LIKE-подстрока vs точное совпадение.
+_STU_SEARCH_LIKE_FIELDS = {
+    "surname": "o_surname", "name": "o_name", "lastname": "o_lastname",
+    "group_name": "o_group_name", "gender": "o_gender",
+    "birthplace": "o_birthplace", "citizenship": "o_citizenship",
+    "nationality": "o_nationality", "religion": "o_religion",
+    "marital_status": "o_marital_status", "residence": "o_residence",
+    "bad_habits": "o_bad_habits", "health_status": "o_health_status",
+    "interests": "o_interests", "skills": "o_skills",
+}
+_STU_SEARCH_EXACT_FIELDS = {"course": "o_course", "age": "o_age",
+                            "birthday": "o_birthday"}
+
+
+def search_students_like(**kwargs):
+    """Расширенный поиск курсантов с частичным совпадением (LIKE).
+
+    Копия логики database.search_students_by_multiple_params, но текстовые
+    условия сравниваются как %значение% — пользователь не обязан вводить
+    фамилию целиком без ошибок. Числовые поля (курс/возраст) — точно.
+    Перенесено из pages/search_page.py (A-1: SQL живёт в репозиториях).
+    """
+    query = "SELECT * FROM students WHERE 1=1"
+    params = []
+    for kw, col in {**_STU_SEARCH_LIKE_FIELDS,
+                    **_STU_SEARCH_EXACT_FIELDS}.items():
+        val = kwargs.get(kw)
+        if val in (None, ""):
+            continue
+        if kw in _STU_SEARCH_LIKE_FIELDS:
+            # Регистронезависимый поиск для кириллицы: LOWER() SQLite
+            # работает только по ASCII, поэтому используем пользовательскую
+            # функцию LOWER_UNICODE (регистрация — в database.connect_to_db).
+            query += f" AND LOWER_UNICODE({col}) LIKE ?"
+            params.append(f"%{str(val).lower()}%")
+        else:
+            query += f" AND {col} = ?"
+            params.append(val)
+    return execute_query(query, params=tuple(params), fetch=True)

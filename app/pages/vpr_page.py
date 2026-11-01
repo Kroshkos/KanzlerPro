@@ -7,6 +7,7 @@ from datetime import datetime
 import flet as ft
 
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
+from access import PermissionDeniedError
 from database import (
     add_encouragement,
     add_penalty,
@@ -14,7 +15,7 @@ from database import (
     get_penalties_by_student,
     search_students_by_name_part,
 )
-from utils import show_snack, to_int
+from utils import session_get, show_snack, to_int
 
 from pages import shell
 
@@ -180,7 +181,15 @@ class EncouragementWorkPage(ft.Column):
             return
 
         # Добавляем поощерение в базу данных
-        add_encouragement(self.selected_student_id, encouragement_type, reason, issued_by, date_obj, order_number)
+        # B-1: серверная проверка прав — роль берётся из сессии
+        try:
+            add_encouragement(self.selected_student_id, encouragement_type, reason,
+                              issued_by, date_obj, order_number,
+                              actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            show_snack(self._page, ft.Text("Недостаточно прав для добавления поощрения"))
+            self._page.update()
+            return
 
         # Обновляем таблицу с поощерениями
         self.update_encouragements_table(self.selected_student_id)
@@ -386,7 +395,15 @@ class PenaltyWorkPage(ft.Column):
             return
 
         # Добавляем взыскание в базу данных
-        add_penalty(self.selected_student_id, penalty_type, reason, date_r_obj, issued_by, date_obj, order_number)
+        # B-1: серверная проверка прав — роль берётся из сессии
+        try:
+            add_penalty(self.selected_student_id, penalty_type, reason, date_r_obj,
+                        issued_by, date_obj, order_number,
+                        actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            show_snack(self._page, ft.Text("Недостаточно прав для добавления взыскания"))
+            self._page.update()
+            return
 
         # Обновляем таблицу с взысканиями
         self.update_penalties_table(self.selected_student_id)

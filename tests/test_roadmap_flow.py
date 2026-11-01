@@ -64,9 +64,10 @@ def seeded(db):
     """Курсант + достижение в каталоге (10 баллов, тип ms)."""
     sid = db.add_student({"o_surname": "Петров", "o_name": "Иван",
                           "o_lastname": "Иванович", "o_course": 1,
-                          "o_group_name": "А-1"})
+                          "o_group_name": "А-1"}, actor_role=db.ADMIN_ROLE)
     db.add_achievement("A1", 1, "Меткий выстрел", 10,
-                       version="", calc_type="ms")
+                       version="", calc_type="ms",
+                       actor_role=db.ADMIN_ROLE)
     return db, sid
 
 
@@ -75,20 +76,20 @@ class TestReviewLifecycle:
         """Регрессия: заявка обязана получать created_at (колонка добавлена
         миграцией; без неё запрос уведомлений тихо падал)."""
         db, sid = seeded
-        db.add_review(sid, "A1", semester=1, status="pending")
+        db.add_review(sid, "A1", semester=1, status="pending", actor_role=db.ADMIN_ROLE)
         row = db.execute_query(
             "SELECT created_at FROM roadmap_reviews", fetch=True)[0]
         assert row["created_at"]  # непустое значение времени создания
 
     def test_approved_review_gets_final_points(self, seeded):
         db, sid = seeded
-        db.add_review(sid, "A1", semester=1, status="approved", k_ur=1.5)
+        db.add_review(sid, "A1", semester=1, status="approved", k_ur=1.5, actor_role=db.ADMIN_ROLE)
         rows = db.get_reviews(student_id=sid, status="approved")
         assert rows[0]["final_points"] == round(10 * 1.5)
 
     def test_pending_review_has_no_final_points(self, seeded):
         db, sid = seeded
-        db.add_review(sid, "A1", semester=1, status="pending")
+        db.add_review(sid, "A1", semester=1, status="pending", actor_role=db.ADMIN_ROLE)
         rows = db.get_reviews(student_id=sid, status="pending")
         assert rows[0]["final_points"] is None
 
@@ -96,9 +97,9 @@ class TestReviewLifecycle:
         """Регрессия на тихую порчу данных: удаление — физический DELETE,
         а не мягкая отметка status='deleted'."""
         db, sid = seeded
-        db.add_review(sid, "A1", semester=1, status="pending")
+        db.add_review(sid, "A1", semester=1, status="pending", actor_role=db.ADMIN_ROLE)
         rid = db.get_reviews(student_id=sid)[0]["id"]
-        db.delete_review(rid)
+        db.delete_review(rid, actor_role=db.ADMIN_ROLE)
         assert db.get_reviews(student_id=sid) == []
         left = db.execute_query(
             "SELECT COUNT(*) AS c FROM roadmap_reviews WHERE id = ?",
@@ -108,15 +109,15 @@ class TestReviewLifecycle:
     def test_count_pending_reviews(self, seeded):
         db, sid = seeded
         assert db.count_pending_reviews() == 0
-        db.add_review(sid, "A1", semester=1, status="pending")
-        db.add_review(sid, "A1", semester=2, status="approved")
+        db.add_review(sid, "A1", semester=1, status="pending", actor_role=db.ADMIN_ROLE)
+        db.add_review(sid, "A1", semester=2, status="approved", actor_role=db.ADMIN_ROLE)
         assert db.count_pending_reviews() == 1
 
     def test_total_points_only_approved(self, seeded):
         """В суммарный рейтинг курсанта попадают только подтверждённые заявки."""
         db, sid = seeded
-        db.add_review(sid, "A1", semester=1, status="pending")
+        db.add_review(sid, "A1", semester=1, status="pending", actor_role=db.ADMIN_ROLE)
         assert db.get_student_total_points(sid, semester=1) == 0
         rid = db.get_reviews(student_id=sid)[0]["id"]
-        db.update_review(rid, "approved", final_points=10)
+        db.update_review(rid, "approved", final_points=10, actor_role=db.ADMIN_ROLE)
         assert db.get_student_total_points(sid, semester=1) == 10

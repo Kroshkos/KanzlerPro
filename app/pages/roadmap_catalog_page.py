@@ -5,6 +5,7 @@
 """
 
 import flet as ft
+from access import PermissionDeniedError
 from database import (
     BLOCK_NAMES,
     add_achievement,
@@ -133,16 +134,26 @@ class RoadmapCatalogPage(ft.Column):
                 raise ValueError("Заполните ID и название")
             add_achievement(self.f_id.value.strip(), self.f_block.value,
                             self.f_name.value.strip(), to_int(self.f_points.value, 0),
-                            self.f_version.value or "", self.f_calc.value)
+                            self.f_version.value or "", self.f_calc.value,
+                            actor_role=session_get(self._page, "role"))
             user = session_get(self._page, "username")
             log_action(user, f"Справочник: сохранено достижение {self.f_id.value}")
             self.refresh_table()
+        except PermissionDeniedError:
+            self.counter.value = "Отказано: действие доступно только администратору"
+            self._page.update()
         except Exception as ex:
             self.counter.value = f"Ошибка: {ex}"
             self._page.update()
 
     def delete_row(self, ach_id):
-        delete_achievement(ach_id)
+        try:
+            # B-1: серверная проверка прав — роль из сессии
+            delete_achievement(ach_id, actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            self.counter.value = "Отказано: действие доступно только администратору"
+            self._page.update()
+            return
         log_action(session_get(self._page, "username"),
                    f"Справочник: удалено достижение {ach_id}")
         self.refresh_table()
@@ -150,11 +161,15 @@ class RoadmapCatalogPage(ft.Column):
     def import_csv(self, e):
         path = (self.csv_field.value or "").strip()
         try:
-            n = import_achievements_from_csv(path)
+            n = import_achievements_from_csv(
+                path, actor_role=session_get(self._page, "role"))
             log_action(session_get(self._page, "username"),
                        f"Справочник: импорт CSV ({n} записей)")
             self.counter.value = f"Импортировано записей: {n}"
             self.refresh_table()
+        except PermissionDeniedError:
+            self.counter.value = "Отказано: импорт доступен только администратору"
+            self._page.update()
         except Exception as ex:
             self.counter.value = f"Ошибка импорта: {ex}"
             self._page.update()

@@ -16,7 +16,8 @@
 # ---------- Пользователи ----------
 
 def test_add_user_stores_hash_not_plaintext(db):
-    db.add_user("ivanov", "S3cret!", db.DEFAULT_ROLE)
+    # Пароль >= MIN_PASSWORD_LENGTH — политика B-2
+    db.add_user("ivanov", "S3cret!passw0rd", db.DEFAULT_ROLE, actor_role=db.ADMIN_ROLE)
     row = db.execute_query(
         "SELECT password FROM users WHERE username = ?", ("ivanov",), fetch=True)[0]
     assert not str(row["password"]).startswith("S3cret")
@@ -25,13 +26,14 @@ def test_add_user_stores_hash_not_plaintext(db):
 
 def test_check_user_returns_role(db):
     from constants import ADMIN_ROLE, DEFAULT_ROLE
-    db.add_user("admin1", "pwd", ADMIN_ROLE)
-    db.add_user("user1", "pwd", DEFAULT_ROLE)
+    # Пароли >= MIN_PASSWORD_LENGTH — политика B-2
+    db.add_user("admin1", "strongpwd1", ADMIN_ROLE, actor_role=db.ADMIN_ROLE)
+    db.add_user("user1", "strongpwd1", DEFAULT_ROLE, actor_role=db.ADMIN_ROLE)
 
-    assert db.check_user("admin1", "pwd")[0][2] == ADMIN_ROLE
-    assert db.check_user("user1", "pwd")[0][2] == DEFAULT_ROLE
-    assert db.check_user("user1", "bad") is None
-    assert db.check_user("ghost", "pwd") is None
+    assert db.check_user("admin1", "strongpwd1")[0][2] == ADMIN_ROLE
+    assert db.check_user("user1", "strongpwd1")[0][2] == DEFAULT_ROLE
+    assert db.check_user("user1", "wrongpassword") is None
+    assert db.check_user("ghost", "strongpwd1") is None
 
 
 def test_legacy_plaintext_password_migrates_on_login(db):
@@ -48,12 +50,12 @@ def test_legacy_plaintext_password_migrates_on_login(db):
 
 
 def test_update_user_password_rehashes(db):
-    db.add_user("petrov", "a", "Пользователь")
+    db.add_user("petrov", "oldpassword1", "Пользователь", actor_role=db.ADMIN_ROLE)
     uid = db.execute_query("SELECT id FROM users WHERE username='petrov'",
                            fetch=True)[0]["id"]
-    db.update_user_password(uid, "b")
-    assert db.check_user("petrov", "a") is None
-    assert db.check_user("petrov", "b") is not None
+    db.update_user_password(uid, "newpassword2", actor_role=db.ADMIN_ROLE)
+    assert db.check_user("petrov", "oldpassword1") is None
+    assert db.check_user("petrov", "newpassword2") is not None
 
 
 # ---------- Схема MKR / created_at ----------
@@ -72,7 +74,7 @@ def test_get_recent_pending_reviews_works(db):
     """Запрос колокольчика не падает и находит pending-заявку по created_at."""
     sid = _add_student(db)
     _seed_achievement(db)
-    db.add_review(sid, "ach_test_1", semester=1)
+    db.add_review(sid, "ach_test_1", semester=1, actor_role=db.ADMIN_ROLE)
     rows = db.get_recent_pending_reviews(limit=5)
     ids = [r["student_id"] if hasattr(r, "keys") else r[1] for r in rows]
     assert sid in ids
@@ -96,7 +98,7 @@ def _seed_achievement(db):
 def test_add_review_sets_created_at(db):
     sid = _add_student(db)
     _seed_achievement(db)
-    db.add_review(sid, "ach_test_1", semester=1)
+    db.add_review(sid, "ach_test_1", semester=1, actor_role=db.ADMIN_ROLE)
     row = db.execute_query(
         "SELECT created_at, status FROM roadmap_reviews WHERE student_id = ?",
         (sid,), fetch=True)[0]
@@ -107,9 +109,9 @@ def test_add_review_sets_created_at(db):
 def test_delete_review_removes_row(db):
     sid = _add_student(db)
     _seed_achievement(db)
-    db.add_review(sid, "ach_test_1", semester=1)
+    db.add_review(sid, "ach_test_1", semester=1, actor_role=db.ADMIN_ROLE)
     rid = db.execute_query("SELECT id FROM roadmap_reviews LIMIT 1", fetch=True)[0]["id"]
-    db.delete_review(rid)
+    db.delete_review(rid, actor_role=db.ADMIN_ROLE)
     left = db.execute_query("SELECT COUNT(*) c FROM roadmap_reviews", fetch=True)[0]["c"]
     assert left == 0
 
@@ -117,9 +119,9 @@ def test_delete_review_removes_row(db):
 def test_update_review_approves_with_points(db):
     sid = _add_student(db)
     _seed_achievement(db)
-    db.add_review(sid, "ach_test_1", semester=1)
+    db.add_review(sid, "ach_test_1", semester=1, actor_role=db.ADMIN_ROLE)
     rid = db.execute_query("SELECT id FROM roadmap_reviews LIMIT 1", fetch=True)[0]["id"]
-    db.update_review(rid, "approved", final_points=12)
+    db.update_review(rid, "approved", final_points=12, actor_role=db.ADMIN_ROLE)
     row = db.execute_query("SELECT status, final_points FROM roadmap_reviews WHERE id=?",
                            (rid,), fetch=True)[0]
     assert row["status"] == "approved"
