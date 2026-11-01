@@ -84,21 +84,9 @@ class PremiaWorkPage(ft.Column):
             self.back_button
         ]
 
-# ---------- Формула размера премии (BACKLOG T-3) ----------
-# Чистые функции без Flet/БД: табличные тесты покрывают их напрямую.
-# Дисциплинарные и «провальные» основания имеют приоритет над оценками
-# сессии; процентная шкала взята из прежней логики PremiaWorkPage
-# (значения не менялись — только вынесены из UI в модуль premia_calc).
-
-from pages import premia_calc
-
-
-def _compute_premia(min_grade, has_penalties, last_position, has_failed_subjects,
-                    has_session_results=True):
-    """Тонкая обёртка над premia_calc.compute_premia (см. T-3)."""
-    return premia_calc.compute_premia(
-        min_grade, has_penalties, last_position, has_failed_subjects,
-        has_session_results)
+    # ---------- Формула размера премии (BACKLOG T-3) ----------
+    # Сама формула вынесена в чистый модуль pages.premia_calc (без Flet/БД),
+    # чтобы её покрывали табличные тесты; здесь остаётся только сбор данных.
 
     def show_results_click(self, e):
         course = self.course_dropdown.value
@@ -132,6 +120,9 @@ def _compute_premia(min_grade, has_penalties, last_position, has_failed_subjects
         failed_ids = repo.map_failed_subjects(ids)
         session_map = repo.map_latest_session_results(ids, semester)
 
+        # Таблица должностей/форм для причин — из чистого модуля (T-3)
+        from pages import premia_calc
+
         # Очищаем таблицу и добавляем результаты
         self.results_table.rows = []
         for i, student in enumerate(students):
@@ -148,78 +139,37 @@ def _compute_premia(min_grade, has_penalties, last_position, has_failed_subjects
             # старой версии с get_last_rank -> None)
             last_rank = ranks_map.get(student_id, "") or ""
 
-            if last_position and last_position[0] == "Заместитель командира взвода":
-                formated_post = "заместителя командира взвода"
-            elif last_position and last_position[0] == "Командир 1 отделения":
-                formated_post = "командира 1 отделения"
-            elif last_position and last_position[0] == "Командир 2 отделения":
-                formated_post = "командира 2 отделения"
-            elif last_position and last_position[0] == "Командир 3 отделения":
-                formated_post = "командира 3 отделения"
-            else:
-                formated_post = None
-
             # Получаем взыскания курсанта за выбранный период (из пакета)
             penalties = penalties_map.get(student_id, [])
 
             # Формируем текст с выговорами
             penalty_text = ", ".join([f"{p[0]} от {p[1]} (от {datetime.strptime(p[2], '%Y-%m-%d').strftime('%d.%m.%Y')})" for p in penalties]) if penalties else "Нет"
 
-            # Проверяем, есть ли хотя бы один предмет, по которому последняя оценка отсутствует (не допущен или отсутствовал) или равна 2
-            # Проверяем по всем семестрам (батч map_failed_subjects)
+            # Проверяем, есть ли хотя бы один предмет, по которому последняя
+            # оценка отсутствует (не допущен или отсутствовал) или равна 2
+            # (батч map_failed_subjects по всем семестрам)
             has_failed = student_id in failed_ids
 
-            # Если есть хотя бы один предмет без оценки или с оценкой 2, премия равна 1
-            if has_failed:
-                premia_size = 1
-                premia_reason = "Не допущен, отсутствовал или оценка 2 по одному из предметов"
-            else:
-                # Результаты сессии за выбранный семестр из пакетной карты
-                session_results = session_map.get(student_id, [])
+            # Результаты сессии за выбранный семестр из пакетной карты
+            session_results = session_map.get(student_id, [])
+            grades = [r[1] for r in session_results if r[1] is not None]
+            min_grade = min(grades) if grades else None
 
-                # Если есть результаты, берем минимальную оценку из последних оценок
-                if session_results:
-                    grades = [result[1] for result in session_results if result[1] is not None]
-                    min_grade = min(grades) if grades else None
-                else:
-                    min_grade = None
-
-                # Определяем результат сессии
-                if min_grade == "2":
-                    session_result = "неудовлетворительно"
-                elif min_grade == "3":
-                    session_result = "удовлетворительно"
-                elif min_grade == "4":
-                    session_result = "хорошо"
-                elif min_grade == "5":
-                    session_result = "отлично"
-                else:
-                    session_result = "нет данных"
-
-                # Определяем размер премии и причину изменения
-                premia_size = 0
-                premia_reason = ""
-
-                if min_grade == "2":
-                    premia_size = 1
-                    premia_reason = "Неудовлетворительный результат сессии"
-                elif session_result == "нет данных":
-                    premia_size = "???"
-                    premia_reason = "Нет данных о сессии"
-                elif penalties:
-                    premia_size = 1
-                    premia_reason = "Наличие дисциплинарного взыскания"
-                elif last_position and last_position[0].lower() not in ["курсант", "слушатель"]:
-                    premia_size = 25
-                    premia_reason = f"Занимает должность {formated_post} (приказ НВМедА № {last_position[2]} от {datetime.strptime(last_position[1], '%Y-%m-%d').strftime('%d.%m.%Y')}г.)"
-                elif session_result == "неудовлетворительно":
-                    premia_size = 1
-                elif session_result == "удовлетворительно":
-                    premia_size = 5
-                elif session_result == "хорошо":
-                    premia_size = 15
-                elif session_result == "отлично":
-                    premia_size = 25
+            # Размер премии, причина и результат сессии — чистая формула
+            # premia_calc.compute_premia (табличные тесты T-3). Дату приказа
+            # передаём как есть (ГГГГ-ММ-ДД); форматирование — на уровне UI.
+            premia_size, premia_reason, session_result = \
+                premia_calc.compute_premia(
+                    min_grade=min_grade,
+                    has_penalties=bool(penalties),
+                    last_position=last_position,
+                    has_failed_subjects=has_failed,
+                    has_session_results=bool(session_results))
+            if "приказ НВМедА №" in premia_reason and last_position:
+                premia_reason = premia_reason.replace(
+                    last_position[1],
+                    datetime.strptime(last_position[1],
+                                      "%Y-%m-%d").strftime("%d.%m.%Y"))
 
             # Добавляем строку в таблицу
             self.results_table.rows.append(
@@ -287,16 +237,6 @@ def _compute_premia(min_grade, has_penalties, last_position, has_failed_subjects
 
             show_snack(self._page, ft.Text(f"Файл сохранен: {file_path}"))
             self._page.update()
-    def _wrap_control(self, control):
-        """Возвращает контрол для показа: внутри каркаса — через shell
-        (боковое меню сохраняется), автономно — как раньше."""
-        from pages import shell as _shell
-        sh = _shell.get_shell()
-        if sh is not None and self._page is not None:
-            sh.open_standalone(type(control).__name__, control)
-            return None
-        return control
-
 
     def back_click(self, e):
         shell.back_to_app(self._page)

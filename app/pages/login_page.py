@@ -2,7 +2,7 @@ import flet as ft
 import ui_kit as k
 
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
-from database import check_user, log_action
+from database import AccountLockedError, check_user, log_action
 from utils import session_set
 
 from pages.registry import get_page
@@ -82,7 +82,16 @@ class LoginPage(ft.Column):
         if not username or not password:
             self.notice.show("Заполните имя пользователя и пароль", kind="warning")
         else:
-            user = check_user(username, password)
+            try:
+                user = check_user(username, password)
+            except AccountLockedError:
+                # B-2: учётка заблокирована после серии неудачных попыток
+                self.notice.show(
+                    "Учётка временно заблокирована после нескольких "
+                    "неудачных попыток входа. Повторите позже.",
+                    kind="error")
+                page.update()
+                return
             if user:
                 # check_user возвращает [(id, username, role)] — ровно 3 поля
                 user_id, username, role = user[0]

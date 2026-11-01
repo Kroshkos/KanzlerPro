@@ -25,13 +25,14 @@ def test_add_user_stores_hash_not_plaintext(db):
 
 def test_check_user_returns_role(db):
     from constants import ADMIN_ROLE, DEFAULT_ROLE
-    db.add_user("admin1", "pwd", ADMIN_ROLE)
-    db.add_user("user1", "pwd", DEFAULT_ROLE)
+    # Пароли >= MIN_PASSWORD_LENGTH — политика B-2
+    db.add_user("admin1", "strongpwd1", ADMIN_ROLE)
+    db.add_user("user1", "strongpwd1", DEFAULT_ROLE)
 
-    assert db.check_user("admin1", "pwd")[0][2] == ADMIN_ROLE
-    assert db.check_user("user1", "pwd")[0][2] == DEFAULT_ROLE
-    assert db.check_user("user1", "bad") is None
-    assert db.check_user("ghost", "pwd") is None
+    assert db.check_user("admin1", "strongpwd1")[0][2] == ADMIN_ROLE
+    assert db.check_user("user1", "strongpwd1")[0][2] == DEFAULT_ROLE
+    assert db.check_user("user1", "wrongpassword") is None
+    assert db.check_user("ghost", "strongpwd1") is None
 
 
 def test_legacy_plaintext_password_migrates_on_login(db):
@@ -48,12 +49,12 @@ def test_legacy_plaintext_password_migrates_on_login(db):
 
 
 def test_update_user_password_rehashes(db):
-    db.add_user("petrov", "a", "Пользователь")
+    db.add_user("petrov", "oldpassword1", "Пользователь")
     uid = db.execute_query("SELECT id FROM users WHERE username='petrov'",
                            fetch=True)[0]["id"]
-    db.update_user_password(uid, "b")
-    assert db.check_user("petrov", "a") is None
-    assert db.check_user("petrov", "b") is not None
+    db.update_user_password(uid, "newpassword2")
+    assert db.check_user("petrov", "oldpassword1") is None
+    assert db.check_user("petrov", "newpassword2") is not None
 
 
 # ---------- Схема MKR / created_at ----------
