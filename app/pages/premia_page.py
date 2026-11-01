@@ -84,6 +84,22 @@ class PremiaWorkPage(ft.Column):
             self.back_button
         ]
 
+# ---------- Формула размера премии (BACKLOG T-3) ----------
+# Чистые функции без Flet/БД: табличные тесты покрывают их напрямую.
+# Дисциплинарные и «провальные» основания имеют приоритет над оценками
+# сессии; процентная шкала взята из прежней логики PremiaWorkPage
+# (значения не менялись — только вынесены из UI в модуль premia_calc).
+
+from pages import premia_calc
+
+
+def _compute_premia(min_grade, has_penalties, last_position, has_failed_subjects,
+                    has_session_results=True):
+    """Тонкая обёртка над premia_calc.compute_premia (см. T-3)."""
+    return premia_calc.compute_premia(
+        min_grade, has_penalties, last_position, has_failed_subjects,
+        has_session_results)
+
     def show_results_click(self, e):
         course = self.course_dropdown.value
         start_date_str = self.start_date_field.value

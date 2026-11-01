@@ -6,6 +6,7 @@ from datetime import datetime
 # Абсолютный путь к файлу базы данных (не зависит от текущей директории,
 # из которой запущено приложение — раньше БД «терялась» при запуске из другой папки)
 from config import DB_PATH  # единая база приложения kanzler_pro.db
+from access import require_role
 from constants import ADMIN_ROLE, DEFAULT_ROLE
 from security import hash_password, needs_migration, verify_password
 from utils_logger import log_except
@@ -326,41 +327,147 @@ def log_action(username, action):
     query = "INSERT INTO logs (timestamp, username, action) VALUES (?, ?, ?)"
     execute_query(query, (timestamp, username, action))
 
+
+# ---------- Политика паролей и защита от перебора (BACKLOG B-2) ----------
+
+MIN_PASSWORD_LENGTH = 8      # минимальная длина пароля
+MAX_FAILED_ATTEMPTS = 5      # неудачных попыток подряд до блокировки
+LOCKOUT_MINUTES = 15         # длительность временной блокировки учётки
+
+
+class PasswordPolicyError(ValueError):
+    """Пароль не удовлетворяет политике безопасности."""
+
+
+class AccountLockedError(Exception):
+    """Учётка временно заблокирована из-за серии неудачных попыток входа."""
+
+
+def validate_password_strength(password):
+    """Проверяет пароль по политике (B-2); бросает PasswordPolicyError.
+
+    Возвращает нормализованную строку пароля (без обрамляющих пробелов).
+    Правила намерено минимальные: пустой пароль запрещён, длина не менее
+    MIN_PASSWORD_LENGTH символов.
+    """
+    pwd = (password or "").strip()
+    if len(pwd) < MIN_PASSWORD_LENGTH:
+        raise PasswordPolicyError(
+            f"Пароль должен содержать не менее {MIN_PASSWORD_LENGTH} символов")
+    return pwd
+
+
+def _ensure_lockout_columns():
+    """Идемпотентно добавляет колонки счётчика перебора в таблицу users."""
+    ensure_column("users", "failed_attempts", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column("users", "locked_until", "TEXT")
+
+
+def _lockout_active(locked_until):
+    """True, если метка блокировки ещё не истекла."""
+    if not locked_until:
+        return False
+    try:
+        until = datetime.strptime(str(locked_until)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return datetime.now() < until
+
+
+def register_failed_attempt(user_id):
+    """Увеличивает счётчик неудачных попыток; при достижении лимита — блокирует."""
+    _ensure_lockout_columns()
+    now = datetime.now()
+    rows = execute_query(
+        "SELECT COALESCE(failed_attempts, 0) AS fa FROM users WHERE id = ?",
+        (user_id,), fetch=True)
+    attempts = int(rows[0]["fa"]) + 1 if rows else 1
+    if attempts >= MAX_FAILED_ATTEMPTS:
+        from datetime import timedelta
+        locked_until = (now + timedelta(minutes=LOCKOUT_MINUTES)
+                        ).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+        execute_query(
+            "UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?",
+            (attempts, locked_until, user_id))
+    else:
+        execute_query(
+            "UPDATE users SET failed_attempts = ?, locked_until = NULL WHERE id = ?",
+            (attempts, user_id))
+    return attempts
+
+
+def reset_failed_attempts(user_id):
+    """Сбрасывает счётчик перебора после успешного входа."""
+    _ensure_lockout_columns()
+    execute_query(
+        "UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?",
+        (user_id,))
+
+
 # Проверка пользователя с возвратом роли
 # Возвращает список кортежей (id, username, role) либо None, если пользователь не найден.
 # Пароли хранятся в виде PBKDF2-хешей; устаревшие открытые пароли
 # прозрачно мигрируются в хеши при первой успешной авторизации.
+# Защита от перебора (B-2): MAX_FAILED_ATTEMPTS неудачных попыток подряд
+# временно блокируют учётку (locked_until в таблице users).
 def check_user(username, password):
+    _ensure_lockout_columns()
     rows = execute_query(
-        "SELECT id, username, role, password FROM users WHERE username = ?",
+        "SELECT id, username, role, password, "
+        "COALESCE(failed_attempts, 0) AS failed_attempts, locked_until "
+        "FROM users WHERE username = ?",
         (username,), fetch=True)
     if not rows:
         return None
-    user_id, db_username, role, stored_password = rows[0]
+    user_id, db_username, role, stored_password = rows[0][:4]
+    if _lockout_active(rows[0]["locked_until"]):
+        raise AccountLockedError(
+            f"Учётка заблокирована на {LOCKOUT_MINUTES} мин после "
+            f"{MAX_FAILED_ATTEMPTS} неудачных попыток входа")
     if not verify_password(password, stored_password):
+        register_failed_attempt(user_id)
         return None
     if needs_migration(stored_password):
         execute_query("UPDATE users SET password = ? WHERE id = ?",
                       (hash_password(password), user_id))
+    reset_failed_attempts(user_id)
     return [(user_id, db_username, role)]
 
-# Добавление нового пользователя (пароль сохраняется только как хеш)
-def add_user(username, password, role=DEFAULT_ROLE):
+# Добавление нового пользователя (пароль сохраняется только как хеш).
+# Пустой пароль разрешён только для служебной первичной записи 'admin'
+# (случайный пароль из main.py генерируется вне этой функции);
+# пользовательские пароли проходят политику длины (B-2).
+# actor_role — роль инициатора (B-1): мутация требует права администратора;
+# None — легаси-вызов без сессии (переходный режим access.ALLOW_UNSCOPED).
+def add_user(username, password, role=DEFAULT_ROLE, actor_role=None):
+    require_role(actor_role, ADMIN_ROLE, action="создание пользователя")
+    pwd = (password or "").strip()
+    if pwd:
+        pwd = validate_password_strength(pwd)
+    elif username != "admin":
+        raise PasswordPolicyError(
+            f"Пароль должен содержать не менее {MIN_PASSWORD_LENGTH} символов")
     query = "INSERT INTO users (username, password, role) VALUES (?, ?, ?)"
-    execute_query(query, (username, hash_password(password), role))
+    execute_query(query, (username, hash_password(pwd), role))
 
-# Смена пароля пользователя
-def update_user_password(user_id, new_password):
+# Смена пароля пользователя (новая запись проходит политику B-2)
+def update_user_password(user_id, new_password, actor_role=None):
+    require_role(actor_role, ADMIN_ROLE, action="смена пароля пользователя")
+    pwd = validate_password_strength(new_password)
     query = "UPDATE users SET password = ? WHERE id = ?"
-    execute_query(query, (hash_password(new_password), user_id))
+    execute_query(query, (hash_password(pwd), user_id))
 
 # Удаление пользователя
-def delete_user(user_id):
+def delete_user(user_id, actor_role=None):
+    require_role(actor_role, ADMIN_ROLE, action="удаление пользователя")
     query = "DELETE FROM users WHERE id = ?"
     execute_query(query, (user_id,))
 
-# Изменение роли пользователя
-def update_user_role(user_id, new_role):
+# Изменение роли пользователя (роль — только из белого списка constants.ROLES)
+def update_user_role(user_id, new_role, actor_role=None):
+    require_role(actor_role, ADMIN_ROLE, action="смена роли пользователя")
+    if new_role not in ROLES:
+        raise ValueError(f"Недопустимая роль: {new_role!r}")
     query = "UPDATE users SET role = ? WHERE id = ?"
     execute_query(query, (new_role, user_id))
 
@@ -513,9 +620,61 @@ def migrate_schema():
     for field in STUDENT_FIELDS:
         if ensure_column("students", field):
             added.append(field)
+    # B-2: защита от перебора — счётчик неудачных попыток и метка блокировки
+    for col, decl in (("failed_attempts", "INTEGER NOT NULL DEFAULT 0"),
+                      ("locked_until", "TEXT")):
+        if ensure_column("users", col, decl):
+            added.append(col)
     if added:
-        print(f"[Канцлер] Миграция схемы: добавлено колонок в students: {len(added)}")
+        print("[Канцлер] Миграция схемы: добавлено колонок: "
+              f"{len(added)} (students/users)")
     return added
+
+
+# ---------- Резервное копирование БД (BACKLOG A-4) ----------
+
+BACKUP_KEEP = 10  # сколько последних копий хранить в data/backups
+
+
+def backup_database(db_path=None, backups_dir=None, keep=BACKUP_KEEP):
+    """Копирует файл БД в каталог резервных копий с ротацией.
+
+    Имя копии: kanzler_pro_YYYYMMDD_HHMMSS.db. Хранятся только `keep`
+    последних файлов (старые удаляются). Используется sqlite3 «горячий»
+    backup API — копия консистентна даже при открытом соединении.
+
+    Возвращает путь к созданной копии или None, если исходный файл
+    отсутствует (БД ещё не создана — копировать нечего).
+    """
+    import glob
+
+    from config import DATA_DIR
+
+    db_path = db_path or DB_PATH
+    if not os.path.exists(db_path):
+        return None
+    backups_dir = backups_dir or os.path.join(DATA_DIR, "backups")
+    os.makedirs(backups_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = os.path.splitext(os.path.basename(db_path))[0]
+    dest = os.path.join(backups_dir, f"{base}_{stamp}.db")
+    src = sqlite3.connect(db_path)
+    dst = sqlite3.connect(dest)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    # Ротация: оставляем `keep` самых свежих копий (сортировка по имени —
+    # метка времени в формате YYYYMMDD_HHMMSS лексикографически совпадает
+    # с хронологическим порядком).
+    pattern = os.path.join(glob.escape(backups_dir), f"{glob.escape(base)}_*.db")
+    for old in sorted(glob.glob(pattern))[:-keep]:
+        try:
+            os.remove(old)
+        except OSError:
+            log_except(f"database: ротация бэкапа {old}")
+    return dest
 
 
 def update_student(student_id, student_data):
@@ -1047,6 +1206,8 @@ def init_mkr_tables():
     # всегда падал в except. Колонка добавляется один раз; значение по
     # умолчанию для новых записей проставляет add_review.
     ensure_column("roadmap_reviews", "created_at", "DATETIME")
+    # B-2: счётчик перебора и метка блокировки учётки (для старых файлов БД)
+    _ensure_lockout_columns()
 
 
 # Названия блоков достижений (справочник Road Map)
@@ -1124,7 +1285,18 @@ def import_achievements_from_csv(filepath):
 def calculate_final_points(calc_type, base_points, k_ur=1.0, k_role=1.0,
                            k_vn=1.0, k_st=1.0, duration_months=0,
                            grant_amount=0, ip_bonus=0):
-    """Расчёт итоговых баллов по формуле из MKR."""
+    """Расчёт итоговых баллов по формуле из MKR (финансовые данные — T-3).
+
+    Формула: base * k_ur * k_role * k_vn * k_st (+ бонус за ИПР); для
+    типа 'month' база дополнительно умножается на число месяцев.
+    Особые случаи (закреплены табличными тестами test_points_premia.py):
+      * 'avg_score' — баллы без коэффициентов (средний балл сам по себе);
+      * 'grant'     — берётся сумма гранта, базовые баллы игнорируются;
+      * duration_months <= 0 или None — как один месяц (иначе нулевой
+        срок обнулял бы весь расчёт);
+      * любые None-коэффициенты трактуются как 1.0, None-числа как 0.
+    Результат округляется до целого (banker's rounding встроен round()).
+    """
     base = int(base_points or 0)
     if calc_type == "avg_score":
         return base

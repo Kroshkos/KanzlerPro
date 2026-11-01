@@ -106,7 +106,18 @@ class UsersPage(ft.Column):
             self._page.update()
             return
         try:
-            add_user(username, password, role)
+            # B-1: серверная проверка прав внутри мутатора + B-2: политика паролей
+            add_user(username, password, role,
+                     actor_role=session_get(self._page, "role"))
+        except PermissionError as ex:
+            show_snack(self._page, ft.Text(str(ex)))
+            self._page.update()
+            return
+        except ValueError as ex:
+            # PasswordPolicyError — наследник ValueError: текст политики
+            show_snack(self._page, ft.Text(str(ex)))
+            self._page.update()
+            return
         except Exception:
             # UNIQUE constraint violation — пользователь с таким именем уже существует
             show_snack(self._page, ft.Text(f"Пользователь '{username}' уже существует"))
@@ -130,7 +141,13 @@ class UsersPage(ft.Column):
             show_snack(self._page, ft.Text("Введите новый пароль в поле 'Пароль' и повторите нажатие"))
             self._page.update()
             return
-        update_user_password(user_id, new_password)
+        try:
+            update_user_password(user_id, new_password,
+                                 actor_role=session_get(self._page, "role"))
+        except (PermissionError, ValueError) as ex:
+            show_snack(self._page, ft.Text(str(ex)))
+            self._page.update()
+            return
         log_action(session_get(self._page, "username"), f"Изменён пароль пользователя ID {user_id}")
         self.new_password.value = ""
         show_snack(self._page, ft.Text(f"Пароль пользователя '{target[1]}' обновлён"))
@@ -155,7 +172,13 @@ class UsersPage(ft.Column):
             show_snack(self._page, ft.Text("Нельзя изменить собственную роль"))
             self._page.update()
             return
-        update_user_role(user_id, new_role)
+        try:
+            update_user_role(user_id, new_role,
+                             actor_role=session_get(self._page, "role"))
+        except (PermissionError, ValueError) as ex:
+            show_snack(self._page, ft.Text(str(ex)))
+            self._page.update()
+            return
         log_action(session_get(self._page, "username"), f"Изменена роль пользователя с ID {user_id} на {new_role}")
         self.load_users()
         self._page.update()
@@ -174,7 +197,12 @@ class UsersPage(ft.Column):
                 show_snack(self._page, ft.Text("Нельзя удалить последнего администратора"))
                 self._page.update()
                 return
-        delete_user(user_id)
+        try:
+            delete_user(user_id, actor_role=session_get(self._page, "role"))
+        except PermissionError as ex:
+            show_snack(self._page, ft.Text(str(ex)))
+            self._page.update()
+            return
         log_action(session_get(self._page, "username"), f"Удален пользователь с ID {user_id}")
         self.load_users()
         self._page.update()
