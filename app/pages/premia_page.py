@@ -15,6 +15,7 @@ from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
 from pages import shell
 from utils import session_get, session_set, session_clear, show_snack
+from utils_logger import log_except
 
 
 class PremiaWorkPage(ft.Column):
@@ -264,7 +265,7 @@ class PremiaWorkPage(ft.Column):
                             if len(str(cell.value)) > max_length:
                                 max_length = len(str(cell.value))
                         except:
-                            pass
+                            log_except("premia_page: блок на строке 266")
                     adjusted_width = (max_length + 2) * 1.2  # Добавляем небольшой отступ
                     worksheet.column_dimensions[column_letter].width = adjusted_width
 

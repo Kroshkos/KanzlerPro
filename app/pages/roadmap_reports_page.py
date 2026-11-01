@@ -13,6 +13,7 @@ from database import (search_students_by_name_part, execute_query, log_action)
 from theme import (BG, PRIMARY, SUCCESS, DANGER, TEXT_DARK, TEXT_MUTED,
                    card, section_title)
 from utils import session_get, show_snack, to_int
+from utils_logger import log_except
 
 FORMS = [
     ("R1", "Р-1 · Индивидуальный отчёт курсанта", True),
@@ -141,7 +142,7 @@ class RoadmapReportsPage(ft.Column):
         try:
             self.update()
         except RuntimeError:
-            pass
+            log_except("roadmap_reports_page: блок на строке 143")
 
     def _find_student_id(self):
         name = (self.student_tf.value or "").strip()

@@ -92,6 +92,13 @@ class AddStudentPage(ft.Column):
         super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
 
+        # --- Реестр текстовых полей формы (декомпозиция god-класса) ----------
+        # Поля объявляются в конце __init__ (_build_fields) через self._tf(),
+        # который создаёт ft.TextField, привязывает его к атрибуту и регистрирует
+        # имя в _field_names. Благодаря этому save_click собирает данные и
+        # очищает форму рефлексивно, без ручных словарей на ~100 строк.
+        self._field_names: list[str] = []
+
         self.back_button = ft.FilledButton("Назад", on_click=self.back_click)
         self.save_button = ft.FilledButton("Сохранить", on_click=self.save_click)
 
@@ -126,11 +133,11 @@ class AddStudentPage(ft.Column):
             ),
         )
 
-        self.o_surname = ft.TextField(label="Фамилия", width=300)
-        self.o_name = ft.TextField(label="Имя", width=300)
-        self.o_lastname = ft.TextField(label="Отчество", width=300)
-        self.o_course = ft.TextField(label="Курс набора", width=300)
-        self.o_group_name = ft.TextField(label="Группа", width=300)
+        self._tf("o_surname", label="Фамилия", width=300)
+        self._tf("o_name", label="Имя", width=300)
+        self._tf("o_lastname", label="Отчество", width=300)
+        self._tf("o_course", label="Курс набора", width=300)
+        self._tf("o_group_name", label="Группа", width=300)
         self.o_gender = ft.Dropdown(
             label="Пол",
             options=[
@@ -138,24 +145,24 @@ class AddStudentPage(ft.Column):
                 ft.dropdown.Option("Женский")
             ]
         )
-        self.o_age = ft.TextField(label="Возраст", width=300)
-        self.o_date_of_birth = ft.TextField(label="Дата рождения", width=300)
-        self.o_place_of_birth = ft.TextField(label="Место рождения", width=910)
-        self.o_citizenship = ft.TextField(label="Гражданство", width=300)
-        self.o_nationality = ft.TextField(label="Национальность", width=300)
-        self.o_religion = ft.TextField(label="Вероисповедание", width=300)
-        self.o_marital_status = ft.TextField(label="Семейное положение", width=300)
-        self.kontact_residential_address = ft.TextField(label="Место жительства", width=910)
-        self.kontact_number = ft.TextField(label="Номер телефона", width=300)
-        self.kontact_email = ft.TextField(label="Электронная почта", width=300)
-        self.o_photo = ft.TextField(label="Фотография", width=300, visible=False)
-        self.o_occupation_before_military_service = ft.TextField(label="Деятельность до военной службы", width=300)
-        self.o_bad_habits = ft.TextField(label="Вредные привычки", width=300)
-        self.o_health_status = ft.TextField(label="Состояние здоровья", width=300)
-        self.o_sports_categories = ft.TextField(label="Виды спорта", width=300)
-        self.o_interests = ft.TextField(label="Интересы", width=300)
-        self.o_skills = ft.TextField(label="Навыки", width=300)
-        self.o_sociometric_indicators = ft.TextField(label="Социометрические показатели", width=300)
+        self._tf("o_age", label="Возраст", width=300)
+        self._tf("o_date_of_birth", label="Дата рождения", width=300)
+        self._tf("o_place_of_birth", label="Место рождения", width=910)
+        self._tf("o_citizenship", label="Гражданство", width=300)
+        self._tf("o_nationality", label="Национальность", width=300)
+        self._tf("o_religion", label="Вероисповедание", width=300)
+        self._tf("o_marital_status", label="Семейное положение", width=300)
+        self._tf("kontact_residential_address", label="Место жительства", width=910)
+        self._tf("kontact_number", label="Номер телефона", width=300)
+        self._tf("kontact_email", label="Электронная почта", width=300)
+        self._tf("o_photo", label="Фотография", width=300, visible=False)
+        self._tf("o_occupation_before_military_service", label="Деятельность до военной службы", width=300)
+        self._tf("o_bad_habits", label="Вредные привычки", width=300)
+        self._tf("o_health_status", label="Состояние здоровья", width=300)
+        self._tf("o_sports_categories", label="Виды спорта", width=300)
+        self._tf("o_interests", label="Интересы", width=300)
+        self._tf("o_skills", label="Навыки", width=300)
+        self._tf("o_sociometric_indicators", label="Социометрические показатели", width=300)
         
         o_info = ft.ExpansionTile(
             title=ft.Text("Общие данные"),
@@ -283,61 +290,61 @@ class AddStudentPage(ft.Column):
             ],
         )
 
-        self.ld_passport_series = ft.TextField(label="Серия", width= 300)
-        self.ld_pasport_number = ft.TextField(label="Номер", width= 300)
-        self.ld_pasport_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_pasport_unit_code_given = ft.TextField(label="Код подразделения", width= 300)
-        self.ld_pasport_place_given = ft.TextField(label="Кем выдан", width= 605)
-        self.ld_passport_children = ft.TextField(label="Количество детей", width= 300)
-        self.ld_vb_personal_number = ft.TextField(label="Личный номер", width= 300)
-        self.ld_vb_series = ft.TextField(label="Серия", width= 300)
-        self.ld_vb_number = ft.TextField(label="Номер", width= 300)
-        self.ld_vb_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_vb_place_given = ft.TextField(label="Кем выдан", width= 300)
-        self.ld_vb_vs_date_of_conscription = ft.TextField(label="Дата призыва", width= 300)
-        self.ld_vb_vs_called_upon = ft.TextField(label="Кем призван", width= 605)
-        self.ld_vb_post_post = ft.TextField(label="Должность по штату", width= 300)
-        self.ld_vb_post_assigned = ft.TextField(label="Кем назначен", width= 300)
-        self.ld_vb_post_date_assigned = ft.TextField(label="Дата назначения", width= 300)
-        self.ld_vb_post_number_order = ft.TextField(label="Номер приказа", width= 300)
-        self.ld_vb_rank_rank = ft.TextField(label="Звание", width= 300)
-        self.ld_vb_rank_assigned = ft.TextField(label="Кем присвоено", width= 300)
-        self.ld_vb_rank_date_assigned = ft.TextField(label="Дата присвоения", width= 300)
-        self.ld_vb_rank_number_order = ft.TextField(label="Номер приказа", width= 300)
-        self.ld_vb_fingerprinting_date = ft.TextField(label="Дата проведения дактилоскопии", width= 300)
-        self.ld_vb_fingerprinting_place = ft.TextField(label="Место проведения дактилоскопии", width= 605)
-        self.ld_vb_contract_number = ft.TextField(label="Какой по счету", width= 300)
-        self.ld_vb_contract_term = ft.TextField(label="Срок контракта", width= 300)
-        self.ld_vb_contract_date = ft.TextField(label="Дата заклячения", width= 300)
-        self.ld_vb_contract_number_order = ft.TextField(label="Номер приказа", width= 300)
-        self.ld_inn = ft.TextField(label="Номер ИНН", width= 300)
-        self.ld_snils = ft.TextField(label="Номер СНИЛС", width= 300)
-        self.ld_oms = ft.TextField(label="Номер ОМС", width= 300)
-        self.ld_education_tip = ft.TextField(label="Тип", width= 300)
-        self.ld_education_level = ft.TextField(label="Уровень образования", width= 300)
-        self.ld_education_series = ft.TextField(label="Серия", width= 300)
-        self.ld_education_number = ft.TextField(label="Номер", width= 300)
-        self.ld_education_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_education_name_given = ft.TextField(label="Образовательная организация", width= 910)
-        self.ld_education_city = ft.TextField(label="Город", width= 300)
-        self.ld_education_qualification = ft.TextField(label="Квалификация", width= 300)
-        self.ld_education_specialization = ft.TextField(label="Специальность", width= 300)
-        self.ld_education_form = ft.TextField(label="Форма обучения", width= 300)
-        self.ld_drl_series = ft.TextField(label="Серия", width= 300)
-        self.ld_drl_number = ft.TextField(label="Номер", width= 300)
-        self.ld_drl_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_drl_date_end = ft.TextField(label="Дата окончания действия", width= 300)
-        self.ld_drl_unit_code_given = ft.TextField(label="Код подразделения ГИБДД", width= 300)
-        self.ld_drl_category = ft.TextField(label="Категория ТС", width= 300)
-        self.ld_ccv_series = ft.TextField(label="Серия", width= 300)
-        self.ld_ccv_number = ft.TextField(label="Номер", width= 300)
-        self.ld_ccv_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_pvk_date_counted = ft.TextField(label="Дата съезда", width= 300)
-        self.ld_pvk_address = ft.TextField(label="Адрес проживания", width= 300)
-        self.ld_pvk_type_property = ft.TextField(label="Тип собственности", width= 300)
-        self.ld_pvk_additional_number = ft.TextField(label="Дополнительный номер телефона", width= 300)
-        self.ld_pvk_messenger_main = ft.TextField(label="Основной посыльный", width= 300)
-        self.ld_pvk_messenger_additional = ft.TextField(label="Запасной посыльный", width= 300)
+        self._tf("ld_passport_series", label="Серия", width= 300)
+        self._tf("ld_pasport_number", label="Номер", width= 300)
+        self._tf("ld_pasport_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_pasport_unit_code_given", label="Код подразделения", width= 300)
+        self._tf("ld_pasport_place_given", label="Кем выдан", width= 605)
+        self._tf("ld_passport_children", label="Количество детей", width= 300)
+        self._tf("ld_vb_personal_number", label="Личный номер", width= 300)
+        self._tf("ld_vb_series", label="Серия", width= 300)
+        self._tf("ld_vb_number", label="Номер", width= 300)
+        self._tf("ld_vb_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_vb_place_given", label="Кем выдан", width= 300)
+        self._tf("ld_vb_vs_date_of_conscription", label="Дата призыва", width= 300)
+        self._tf("ld_vb_vs_called_upon", label="Кем призван", width= 605)
+        self._tf("ld_vb_post_post", label="Должность по штату", width= 300)
+        self._tf("ld_vb_post_assigned", label="Кем назначен", width= 300)
+        self._tf("ld_vb_post_date_assigned", label="Дата назначения", width= 300)
+        self._tf("ld_vb_post_number_order", label="Номер приказа", width= 300)
+        self._tf("ld_vb_rank_rank", label="Звание", width= 300)
+        self._tf("ld_vb_rank_assigned", label="Кем присвоено", width= 300)
+        self._tf("ld_vb_rank_date_assigned", label="Дата присвоения", width= 300)
+        self._tf("ld_vb_rank_number_order", label="Номер приказа", width= 300)
+        self._tf("ld_vb_fingerprinting_date", label="Дата проведения дактилоскопии", width= 300)
+        self._tf("ld_vb_fingerprinting_place", label="Место проведения дактилоскопии", width= 605)
+        self._tf("ld_vb_contract_number", label="Какой по счету", width= 300)
+        self._tf("ld_vb_contract_term", label="Срок контракта", width= 300)
+        self._tf("ld_vb_contract_date", label="Дата заклячения", width= 300)
+        self._tf("ld_vb_contract_number_order", label="Номер приказа", width= 300)
+        self._tf("ld_inn", label="Номер ИНН", width= 300)
+        self._tf("ld_snils", label="Номер СНИЛС", width= 300)
+        self._tf("ld_oms", label="Номер ОМС", width= 300)
+        self._tf("ld_education_tip", label="Тип", width= 300)
+        self._tf("ld_education_level", label="Уровень образования", width= 300)
+        self._tf("ld_education_series", label="Серия", width= 300)
+        self._tf("ld_education_number", label="Номер", width= 300)
+        self._tf("ld_education_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_education_name_given", label="Образовательная организация", width= 910)
+        self._tf("ld_education_city", label="Город", width= 300)
+        self._tf("ld_education_qualification", label="Квалификация", width= 300)
+        self._tf("ld_education_specialization", label="Специальность", width= 300)
+        self._tf("ld_education_form", label="Форма обучения", width= 300)
+        self._tf("ld_drl_series", label="Серия", width= 300)
+        self._tf("ld_drl_number", label="Номер", width= 300)
+        self._tf("ld_drl_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_drl_date_end", label="Дата окончания действия", width= 300)
+        self._tf("ld_drl_unit_code_given", label="Код подразделения ГИБДД", width= 300)
+        self._tf("ld_drl_category", label="Категория ТС", width= 300)
+        self._tf("ld_ccv_series", label="Серия", width= 300)
+        self._tf("ld_ccv_number", label="Номер", width= 300)
+        self._tf("ld_ccv_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_pvk_date_counted", label="Дата съезда", width= 300)
+        self._tf("ld_pvk_address", label="Адрес проживания", width= 300)
+        self._tf("ld_pvk_type_property", label="Тип собственности", width= 300)
+        self._tf("ld_pvk_additional_number", label="Дополнительный номер телефона", width= 300)
+        self._tf("ld_pvk_messenger_main", label="Основной посыльный", width= 300)
+        self._tf("ld_pvk_messenger_additional", label="Запасной посыльный", width= 300)
 
 
         ld_info = ft.ExpansionTile(
@@ -683,35 +690,35 @@ class AddStudentPage(ft.Column):
         )
 
 
-        self.if_social_origin = ft.TextField(label="Социальное происхождение", width=300)
-        self.if_family_composition = ft.TextField(label="Состав семьи", width=300)
-        self.if_number_of_children = ft.TextField(label="Количество детей", width=300)
-        self.if_dysfunctional_relatives = ft.TextField(label="Неблагополучные родственники", width=300)
-        self.rd_father_surname = ft.TextField(label="Фамилия", width=300)
-        self.rd_father_name = ft.TextField(label="Имя", width=300)
-        self.rd_father_lastname = ft.TextField(label="Отчество", width=300)
-        self.rd_father_date_of_birth = ft.TextField(label="Дата рождения", width=300)
-        self.rd_father_place_of_birth = ft.TextField(label="Место рождения", width=300)
-        self.rd_father_citizenship = ft.TextField(label="Гражданство", width=300)
-        self.rd_father_passport_series = ft.TextField(label="Серия паспорта", width=300)
-        self.rd_father_passport_number = ft.TextField(label="Номер паспорта", width=300)
-        self.rd_father_passport_date_given = ft.TextField(label="Дата выдачи", width=300)
-        self.rd_father_passport_place_given = ft.TextField(label="Кем выдан", width=300) 
-        self.rd_father_passport_unit_code_given = ft.TextField(label="Код подразделения", width=300)
-        self.rd_father_number = ft.TextField(label="Телефон", width=300)
-        self.rd_mother_surname = ft.TextField(label="Фамилия", width=300)
-        self.rd_mother_name = ft.TextField(label="Имя", width=300)
-        self.rd_mother_lastname = ft.TextField(label="Отчество", width=300)
-        self.rd_mother_date_of_birth = ft.TextField(label="Дата рождения", width=300)
-        self.rd_mother_place_of_birth = ft.TextField(label="Место рождения", width=300)
-        self.rd_mother_citizenship = ft.TextField(label="Гражданство", width=300)
-        self.rd_mother_passport_series = ft.TextField(label="Серия паспорта", width=300)
-        self.rd_mother_passport_number = ft.TextField(label="Номер паспорта", width=300)
-        self.rd_mother_passport_date_given = ft.TextField(label="Дата выдачи", width=300)
-        self.rd_mother_passport_place_given = ft.TextField(label="Кем выдан", width=300) 
-        self.rd_mother_passport_unit_code_given = ft.TextField(label="Код подразделения", width=300)
-        self.rd_mother_number = ft.TextField(label="Телефон", width=300)
-        self.rd_other_info = ft.TextField(label="Другая информация", width=300)
+        self._tf("if_social_origin", label="Социальное происхождение", width=300)
+        self._tf("if_family_composition", label="Состав семьи", width=300)
+        self._tf("if_number_of_children", label="Количество детей", width=300)
+        self._tf("if_dysfunctional_relatives", label="Неблагополучные родственники", width=300)
+        self._tf("rd_father_surname", label="Фамилия", width=300)
+        self._tf("rd_father_name", label="Имя", width=300)
+        self._tf("rd_father_lastname", label="Отчество", width=300)
+        self._tf("rd_father_date_of_birth", label="Дата рождения", width=300)
+        self._tf("rd_father_place_of_birth", label="Место рождения", width=300)
+        self._tf("rd_father_citizenship", label="Гражданство", width=300)
+        self._tf("rd_father_passport_series", label="Серия паспорта", width=300)
+        self._tf("rd_father_passport_number", label="Номер паспорта", width=300)
+        self._tf("rd_father_passport_date_given", label="Дата выдачи", width=300)
+        self._tf("rd_father_passport_place_given", label="Кем выдан", width=300)
+        self._tf("rd_father_passport_unit_code_given", label="Код подразделения", width=300)
+        self._tf("rd_father_number", label="Телефон", width=300)
+        self._tf("rd_mother_surname", label="Фамилия", width=300)
+        self._tf("rd_mother_name", label="Имя", width=300)
+        self._tf("rd_mother_lastname", label="Отчество", width=300)
+        self._tf("rd_mother_date_of_birth", label="Дата рождения", width=300)
+        self._tf("rd_mother_place_of_birth", label="Место рождения", width=300)
+        self._tf("rd_mother_citizenship", label="Гражданство", width=300)
+        self._tf("rd_mother_passport_series", label="Серия паспорта", width=300)
+        self._tf("rd_mother_passport_number", label="Номер паспорта", width=300)
+        self._tf("rd_mother_passport_date_given", label="Дата выдачи", width=300)
+        self._tf("rd_mother_passport_place_given", label="Кем выдан", width=300)
+        self._tf("rd_mother_passport_unit_code_given", label="Код подразделения", width=300)
+        self._tf("rd_mother_number", label="Телефон", width=300)
+        self._tf("rd_other_info", label="Другая информация", width=300)
 
         family_info = ft.ExpansionTile(
             title=ft.Text("Информация о семье"),
@@ -886,13 +893,13 @@ class AddStudentPage(ft.Column):
             ],
         )
 
-        self.da_score_chemistry = ft.TextField(label="Химия", width=200)
-        self.da_score_biology = ft.TextField(label="Биология", width=200)
-        self.da_score_rusian = ft.TextField(label="Русский язык", width=200)
-        self.da_score_fp = ft.TextField(label="Физическая подготовка", width=200)
-        self.da_group_number = ft.TextField(label="Группа ПФО", width=200)
-        self.da_score_diploma = ft.TextField(label="Средний балл диплома", width=200)
-        self.da_additional_education = ft.TextField(label="Дополнительное образование", width=300)
+        self._tf("da_score_chemistry", label="Химия", width=200)
+        self._tf("da_score_biology", label="Биология", width=200)
+        self._tf("da_score_rusian", label="Русский язык", width=200)
+        self._tf("da_score_fp", label="Физическая подготовка", width=200)
+        self._tf("da_group_number", label="Группа ПФО", width=200)
+        self._tf("da_score_diploma", label="Средний балл диплома", width=200)
+        self._tf("da_additional_education", label="Дополнительное образование", width=300)
 
         da_info = ft.ExpansionTile(
             title=ft.Text("Данные при поступлении"),
@@ -966,6 +973,23 @@ class AddStudentPage(ft.Column):
         ]
 
     # Обработчик загрузки фотографии
+    def _tf(self, name, **kwargs):
+        """Создать TextField, привязать к self.<name> и зарегистрировать в форме."""
+        field = ft.TextField(**kwargs)
+        setattr(self, name, field)
+        if name not in self._field_names:
+            self._field_names.append(name)
+        return field
+
+    def collect_form_data(self):
+        """Собрать {имя_поля: значение} по зарегистрированным полям формы."""
+        return {name: getattr(self, name).value for name in self._field_names}
+
+    def reset_form(self):
+        """Очистить все зарегистрированные поля формы."""
+        for name in self._field_names:
+            getattr(self, name).value = ""
+
     def handle_photo_upload(self, e):
         # В Flet >= 0.80 pick_files() возвращает list[FilePickerFile] напрямую,
         # а older API присылал объект FilePickerResultEvent с полем .files.

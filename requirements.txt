@@ -1,4 +1,7 @@
+# --- Продакшн-зависимости «Канцлер Про» (версии зафиксированы) ---
 flet==1.0.5
-pandas
-openpyxl
-reportlab
+pandas==2.3.1
+openpyxl==3.1.5
+reportlab>=4.2,<5
+
+# --- Dev/test (устанавливать отдельно: pip install -r requirements-dev.txt) ---

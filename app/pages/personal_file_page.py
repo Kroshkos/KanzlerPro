@@ -15,6 +15,7 @@ from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
 from pages import shell
 from utils import show_snack, to_int, session_get
+from utils_logger import log_except
 
 
 def session_username(page_obj):
@@ -42,7 +43,7 @@ class PersonalFilePage(ft.Column):
             if picker not in self._page.overlay:
                 self._page.overlay.append(picker)
         except Exception:
-            pass
+            log_except("personal_file_page: блок на строке 44")
         self._pdf_picker = picker
         return picker
 
@@ -74,7 +75,7 @@ class PersonalFilePage(ft.Column):
             else:
                 subprocess.Popen(["xdg-open", path])
         except Exception:
-            pass
+            log_except("personal_file_page: блок на строке 76")
         try:
             with open(path, "rb") as fh:
                 data = fh.read()
@@ -83,7 +84,7 @@ class PersonalFilePage(ft.Column):
                 file_name=os.path.basename(path),
                 src_bytes=data)
         except Exception:
-            pass
+            log_except("personal_file_page: блок на строке 85")
         show_snack(self._page, ft.Text(
             f"Личное дело сохранено в PDF: {os.path.basename(path)}"))
         self._safe_update()
@@ -92,7 +93,7 @@ class PersonalFilePage(ft.Column):
         try:
             self._page.update()
         except Exception:
-            pass
+            log_except("personal_file_page: блок на строке 94")
 
     def __init__(self, page, parent=None):
         super().__init__(scroll=ft.ScrollMode.AUTO)
@@ -544,7 +545,7 @@ class PersonalFilePage(ft.Column):
         try:
             counter.value = f"Найдено: {count}"
         except Exception:
-            pass
+            log_except("personal_file_page: блок на строке 546")
         self._safe_update()
 
     def batch_print_confirm(self, e=None):
@@ -572,7 +573,7 @@ class PersonalFilePage(ft.Column):
             else:
                 subprocess.Popen(["xdg-open", path])
         except Exception:
-            pass
+            log_except("personal_file_page: блок на строке 574")
         try:
             with open(path, "rb") as fh:
                 data = fh.read()
@@ -581,7 +582,7 @@ class PersonalFilePage(ft.Column):
                 file_name=os.path.basename(path),
                 src_bytes=data)
         except Exception:
-            pass
+            log_except("personal_file_page: блок на строке 583")
         self.batch_panel.visible = False
         show_snack(self._page, ft.Text(
             f"Готово: {len(ids)} личныx дел в одном PDF "

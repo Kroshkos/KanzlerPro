@@ -21,6 +21,7 @@ from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED
 from utils import session_get, session_clear, to_num, to_int
 from database import log_action
 from authz import is_admin, require_admin, ADMIN_ONLY_PAGES
+from utils_logger import log_except
 
 
 class KantslerApp(ft.Column):
@@ -157,7 +158,7 @@ class KantslerApp(ft.Column):
         try:
             self._fpage.on_resize = self._on_resize
         except Exception:
-            pass
+            log_except("home_page: блок на строке 159")
 
         self.refresh_notifications()
         self.show_dashboard()
@@ -236,7 +237,7 @@ class KantslerApp(ft.Column):
             if ph is not None and ph > 0:
                 self._last_height = float(ph)
         except Exception:
-            pass
+            log_except("home_page: блок на строке 238")
         if self._apply_layout():
             self._fpage.update()
 
@@ -372,7 +373,7 @@ class KantslerApp(ft.Column):
         try:
             self.refresh_notifications()
         except Exception:
-            pass
+            log_except("home_page: блок на строке 374")
         self._fpage.update()
 
     def open_standalone(self, cls_name, view):
@@ -519,7 +520,7 @@ class KantslerApp(ft.Column):
             self._notif_overlay.expand = True
             closer.expand = True
         except Exception:
-            pass
+            log_except("home_page: блок на строке 521")
         holder = getattr(self, "_notif_holder", None)
         if holder is None:
             holder = ft.Container(visible=False, left=0, top=0, right=0, bottom=0,
@@ -527,7 +528,7 @@ class KantslerApp(ft.Column):
             try:
                 self._fpage.overlay.append(holder)
             except Exception:
-                pass
+                log_except("home_page: блок на строке 529")
             self._notif_holder = holder
         holder.content = self._notif_overlay
         holder.visible = True
@@ -546,7 +547,7 @@ class KantslerApp(ft.Column):
             try:
                 holder.update()
             except Exception:
-                pass
+                log_except("home_page: блок на строке 548")
 
     def show_legacy_menu(self):
         """Совместимость: старое меню убрано — открываем дашборд."""

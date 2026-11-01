@@ -12,6 +12,7 @@ from theme import PRIMARY, SUCCESS, WARNING, DANGER, TEXT_DARK, TEXT_MUTED, card
 from pages import shell
 from pages.registry import get_page
 from database import log_action
+from utils_logger import log_except
 
 
 REVIEW_STATUS = {
@@ -58,7 +59,7 @@ class SearchResultsPage(ft.Column):
         try:
             self._page.update()
         except Exception:
-            pass
+            log_except("search_results_page: блок на строке 60")
 
     def _open_student(self, student_id):
         """Переход в личное дело найденного курсанта."""
@@ -260,7 +261,7 @@ class SearchResultsPage(ft.Column):
             log_action(session_username(self._page),
                        f"Глобальный поиск: «{self.query}» ({total})")
         except Exception:
-            pass
+            log_except("search_results_page: блок на строке 262")
 
 
 def session_username(page_obj):
