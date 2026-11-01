@@ -1,207 +1,257 @@
-
-# tkinter используется только для диалога выбора пути сохранения файлов;
-# импорт выполняется лениво внутри методов, чтобы приложение запускалось
-# даже на системах без установленной среды X11/tkinter.
-
 import flet as ft
-
-# Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
-from database import (
-    search_students_by_multiple_params,
-)
+import ui_kit as k
+from database import connect_to_db
 
 from pages import shell
 
+# Поля, доступные для расширенного поиска (единый список вместо 17 if/elif)
+_EXTRA_FIELDS = [
+    "Имя", "Отчество", "Группа", "Курс", "Возраст", "Пол",
+    "Дата рождения", "Место рождения", "Гражданство", "Национальность",
+    "Вероисповедание", "Семейное положение", "Место жительства",
+    "Вредные привычки", "Состояние здоровья", "Интересы", "Навыки",
+]
+
+# Отображаемое имя поля -> имя kwarg-аргумента функции поиска
+_PARAM_MAP = {
+    "Имя": "name", "Отчество": "lastname", "Группа": "group_name",
+    "Курс": "course", "Возраст": "age", "Пол": "gender",
+    "Дата рождения": "birthday", "Место рождения": "birthplace",
+    "Гражданство": "citizenship", "Национальность": "nationality",
+    "Вероисповедание": "religion", "Семейное положение": "marital_status",
+    "Место жительства": "residence", "Вредные привычки": "bad_habits",
+    "Состояние здоровья": "health_status", "Интересы": "interests",
+    "Навыки": "skills",
+}
+
+
+def _search_like(**kwargs):
+    """Расширенный поиск с частичным совпадением (LIKE) вместо точного.
+
+    Копия логики database.search_students_by_multiple_params, но текстовые
+    условия сравниваются как %значение% — пользователь не обязан вводить
+    фамилию целиком без ошибок. Числовые поля (курс/возраст) — точно.
+    """
+    like_fields = {
+        "surname": "o_surname", "name": "o_name", "lastname": "o_lastname",
+        "group_name": "o_group_name", "gender": "o_gender",
+        "birthplace": "o_birthplace", "citizenship": "o_citizenship",
+        "nationality": "o_nationality", "religion": "o_religion",
+        "marital_status": "o_marital_status", "residence": "o_residence",
+        "bad_habits": "o_bad_habits", "health_status": "o_health_status",
+        "interests": "o_interests", "skills": "o_skills",
+    }
+    exact_fields = {"course": "o_course", "age": "o_age", "birthday": "o_birthday"}
+    query = "SELECT * FROM students WHERE 1=1"
+    params = []
+    for kw, col in {**like_fields, **exact_fields}.items():
+        val = kwargs.get(kw)
+        if val in (None, ""):
+            continue
+        if kw in like_fields:
+            query += f" AND {col} LIKE ?"
+            params.append(f"%{val}%")
+        else:
+            query += f" AND {col} = ?"
+            params.append(val)
+    conn = connect_to_db()
+    try:
+        rows = conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+    return rows
+
 
 class SearchPage(ft.Column):
+    """Поиск курсантов: быстрое ФИО + необязательные уточняющие поля."""
+
     def __init__(self, page, parent=None):
-        super().__init__(scroll=ft.ScrollMode.AUTO)
+        super().__init__(scroll=ft.ScrollMode.AUTO, expand=True)
         self._page = page
-        
-        # Основное поле для поиска по фамилии
-        self.search_surname = ft.TextField(label="Фамилия", width=300)
-        
-        # Выпадающий список для выбора дополнительных полей
-        self.additional_fields_dropdown = ft.Dropdown(
-            label="Добавить поле для поиска",
-            options=[
-                ft.dropdown.Option("Имя"),
-                ft.dropdown.Option("Отчество"),
-                ft.dropdown.Option("Группа"),
-                ft.dropdown.Option("Курс"),
-                ft.dropdown.Option("Возраст"),
-                ft.dropdown.Option("Пол"),
-                ft.dropdown.Option("Дата рождения"),
-                ft.dropdown.Option("Место рождения"),
-                ft.dropdown.Option("Гражданство"),
-                ft.dropdown.Option("Национальность"),
-                ft.dropdown.Option("Вероисповедание"),
-                ft.dropdown.Option("Семейное положение"),
-                ft.dropdown.Option("Место жительства"),
-                ft.dropdown.Option("Вредные привычки"),
-                ft.dropdown.Option("Состояние здоровья"),
-                ft.dropdown.Option("Интересы"),
-                ft.dropdown.Option("Навыки"),
+        page.bgcolor = k.BG_SOFT
 
-            ],
-            on_select=self.add_additional_field
+        # Основное поле — фамилия (Enter сразу ищет)
+        self.search_surname = ft.TextField(
+            label="Фамилия",
+            hint_text="Начните вводить фамилию…",
+            prefix_icon=ft.Icons.SEARCH,
+            border_radius=10,
+            autofocus=True,
+            on_submit=self.perform_search,
         )
-        
-        # Контейнер для дополнительных полей
-        self.additional_fields_container = ft.Column()
-        
-        # Кнопка для выполнения поиска
-        self.search_button = ft.FilledButton("Искать", on_click=self.perform_search)
-        
-        # Кнопка для возврата на главную страницу
-        self.back_button = ft.FilledButton("Назад", on_click=self.back_to_main)
-        
-        # Контейнер для отображения результатов поиска
-        self.results_container = ft.Column()
-        
-        # Добавляем все элементы на страницу
-        self.controls = [
-            ft.Text("Поиск курсантов", size=20, weight="bold"),
-            self.search_surname,
-            self.additional_fields_container,
-            self.additional_fields_dropdown,
-            self.search_button,
-            self.back_button,
-            self.results_container
-        ]
 
-        # Словарь для хранения дополнительных полей
-        self.additional_fields = {
-            "Имя": None,
-            "Отчество": None,
-            "Группа": None,
-            "Курс": None,
-            "Возраст": None,
-            "Пол": None,
-            "Дата рождения": None,
-            "Место рождения": None,
-            "Гражданство": None,
-            "Национальность": None,
-            "Вероисповедание": None,
-            "Семейное положение": None,
-            "Место жительства": None,
-            "Вредные привычки": None,
-            "Состояние здоровья": None,
-            "Интересы": None,
-            "Навыки": None,
+        # Выпадающий список для добавления дополнительных полей
+        self.additional_fields_dropdown = ft.Dropdown(
+            label="+ Добавить критерий поиска",
+            options=[ft.dropdown.Option(f) for f in _EXTRA_FIELDS],
+            border_radius=10,
+            width=320,
+            on_select=self.add_additional_field,
+        )
+
+        self.additional_fields_container = ft.Row(wrap=True, spacing=8,
+                                                  run_spacing=8)
+        self.clear_button = ft.TextButton("Сбросить критерии",
+                                          icon=ft.Icons.CLEAR,
+                                          on_click=self.clear_filters)
+        self.search_button = ft.FilledButton("Искать", icon=ft.Icons.SEARCH,
+                                             on_click=self.perform_search)
+        self.back_button = ft.OutlinedButton("Назад", icon=ft.Icons.ARROW_BACK,
+                                             on_click=self.back_to_main)
+        self.results_container = ft.Column(spacing=8)
+
+        # Словарь активных дополнительных полей {имя_поля: TextField}
+        self.additional_fields: dict[str, ft.TextField | None] = {
+            f: None for f in _EXTRA_FIELDS
         }
 
-    # Обработчик добавления дополнительного поля
+        form = k.card(ft.Column([
+            k.section_title("Поиск курсантов", icon=ft.Icons.PERSON_SEARCH,
+                            subtitle="Укажите фамилию и, при необходимости, "
+                                    "дополнительные критерии"),
+            ft.Row([k.wrap_field(self.search_surname, 240, 360),
+                    self.additional_fields_dropdown],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self.additional_fields_container,
+            ft.Divider(height=1, color=k.BORDER),
+            k.action_row([self.search_button, self.clear_button,
+                          self.back_button]),
+        ]))
+
+        self.controls = [form, self.results_container]
+
+    # ------------------------------------------------------------------
     def add_additional_field(self, e):
         selected_field = self.additional_fields_dropdown.value
-        
-        # Если поле уже добавлено, ничего не делаем
-        if self.additional_fields[selected_field] is not None:
-            return
-        
-        # Создаем поле для ввода в зависимости от выбранного параметра
-        if selected_field == "Имя":
-            field = ft.TextField(label="Имя", width=300)
-        elif selected_field == "Отчество":
-            field = ft.TextField(label="Отчество", width=300)
-        elif selected_field == "Группа":
-            field = ft.TextField(label="Группа", width=300)
-        elif selected_field == "Курс":
-            field = ft.TextField(label="Курс", width=300)
-        elif selected_field == "Возраст":
-            field = ft.TextField(label="Возраст", width=300)
-        elif selected_field == "Пол":
-            field = ft.TextField(label="Пол", width=300)
-        elif selected_field == "Дата рождения":
-            field = ft.TextField(label="Дата рождения", width=300)
-        elif selected_field == "Место рождения":
-            field = ft.TextField(label="Место рождения", width=300)
-        elif selected_field == "Гражданство":
-            field = ft.TextField(label="Гражданство", width=300)
-        elif selected_field == "Национальность":
-            field = ft.TextField(label="Национальность", width=300)
-        elif selected_field == "Вероисповедание":
-            field = ft.TextField(label="Вероисповедание", width=300)
-        elif selected_field == "Семейное положение":
-            field = ft.TextField(label="Семейное положение", width=300)
-        elif selected_field == "Место жительства":
-            field = ft.TextField(label="Место жительства", width=300)
-        elif selected_field == "Вредные привычки":
-            field = ft.TextField(label="Вредные привычки", width=300)
-        elif selected_field == "Состояние здоровья":
-            field = ft.TextField(label="Состояние здоровья", width=300)
-        elif selected_field == "Интересы":
-            field = ft.TextField(label="Интересы", width=300)
-        elif selected_field == "Навыки":
-            field = ft.TextField(label="Навыки", width=300)
-        
-        # Сохраняем поле в словаре
+        if not selected_field or self.additional_fields.get(selected_field):
+            return  # поле уже добавлено
+        field = ft.TextField(label=selected_field, border_radius=10,
+                             on_submit=self.perform_search)
         self.additional_fields[selected_field] = field
-        
-        # Добавляем поле на страницу
-        self.additional_fields_container.controls.append(field)
+        self.additional_fields_container.controls.append(
+            k.wrap_field(field, 220, 300))
+        # даём возможность убрать отдельное поле
+        remove = ft.IconButton(ft.Icons.CLOSE, tooltip=f"Убрать «{selected_field}»",
+                               icon_size=14,
+                               on_click=lambda ev, n=selected_field:
+                               self.remove_field(n))
+        self.additional_fields_container.controls.append(remove)
+        self.additional_fields_dropdown.value = None
         self._page.update()
 
-    # Обработчик выполнения поиска
-    def perform_search(self, e):
-        surname = self.search_surname.value.strip()
-        
-        # Собираем данные из дополнительных полей
-        name = self.additional_fields["Имя"].value.strip() if self.additional_fields["Имя"] else None
-        lastname = self.additional_fields["Отчество"].value.strip() if self.additional_fields["Отчество"] else None
-        group = self.additional_fields["Группа"].value.strip() if self.additional_fields["Группа"] else None
-        course = self.additional_fields["Курс"].value.strip() if self.additional_fields["Курс"] else None
-        age = self.additional_fields["Возраст"].value.strip() if self.additional_fields["Возраст"] else None
-        gender = self.additional_fields["Пол"].value.strip() if self.additional_fields["Пол"] else None
-        birthday = self.additional_fields["Дата рождения"].value.strip() if self.additional_fields["Дата рождения"] else None
-        birthplace = self.additional_fields["Место рождения"].value.strip() if self.additional_fields["Место рождения"] else None
-        citizenship = self.additional_fields["Гражданство"].value.strip() if self.additional_fields["Гражданство"] else None
-        nationality = self.additional_fields["Национальность"].value.strip() if self.additional_fields["Национальность"] else None
-        religion = self.additional_fields["Вероисповедание"].value.strip() if self.additional_fields["Вероисповедание"] else None
-        marital_status = self.additional_fields["Семейное положение"].value.strip() if self.additional_fields["Семейное положение"] else None
-        residence = self.additional_fields["Место жительства"].value.strip() if self.additional_fields["Место жительства"] else None
-        bad_habits = self.additional_fields["Вредные привычки"].value.strip() if self.additional_fields["Вредные привычки"] else None
-        health_status = self.additional_fields["Состояние здоровья"].value.strip() if self.additional_fields["Состояние здоровья"] else None
-        interests = self.additional_fields["Интересы"].value.strip() if self.additional_fields["Интересы"] else None
-        skills = self.additional_fields["Навыки"].value.strip() if self.additional_fields["Навыки"] else None
-        
-        # Вызов функции поиска по нескольким параметрам
-        students = search_students_by_multiple_params(
-            surname=surname if surname else None,
-            name=name if name else None,
-            lastname=lastname if lastname else None,
-            group_name=group if group else None,
-            course=course if course else None,
-            age=age if age else None,
-            gender=gender if gender else None,
-            birthday=birthday if birthday else None,
-            birthplace=birthplace if birthplace else None,
-            citizenship=citizenship if citizenship else None,
-            nationality=nationality if nationality else None,
-            religion=religion if religion else None,
-            marital_status=marital_status if marital_status else None,
-            residence=residence if residence else None,
-            bad_habits=bad_habits if bad_habits else None,
-            health_status=health_status if health_status else None,
-            interests=interests if interests else None,
-            skills=skills if skills else None
-        )
-        
-        # Очистка контейнера с результатами
+    def remove_field(self, name):
+        field = self.additional_fields.get(name)
+        if not field:
+            return
+        # удаляем само поле и его кнопку-крестик из контейнера
+        self.additional_fields_container.controls[:] = [
+            c for c in self.additional_fields_container.controls
+            if not (isinstance(c, ft.Container) and c.content is field)
+            and not (isinstance(c, ft.IconButton)
+                     and c.tooltip == f"Убрать «{name}»")
+        ]
+        self.additional_fields[name] = None
+        self._page.update()
+
+    def clear_filters(self, e):
+        for name in list(self.additional_fields):
+            self.additional_fields[name] = None
+        self.additional_fields_container.controls.clear()
+        self.search_surname.value = ""
         self.results_container.controls.clear()
-        
-        if students:
-            self.results_container.controls.append(ft.Text("Результаты поиска:", size=16, weight="bold"))
-            for student in students:
-                self.results_container.controls.append(
-                    ft.Text(f"{student[1]} {student[2]} {student[3]} (Группа: {student[5]}, Курс: {student[4]})")
-                )
-        else:
-            self.results_container.controls.append(ft.Text("Курсанты не найдены.", color="red"))
-        
-        # Обновляем страницу
         self._page.update()
 
-    # Обработчик возврата на главную страницу
+    # ------------------------------------------------------------------
+    def _collect_kwargs(self):
+        kwargs = {}
+        surname = (self.search_surname.value or "").strip()
+        if surname:
+            kwargs["surname"] = surname
+        for label, field in self.additional_fields.items():
+            if field is None:
+                continue
+            value = (field.value or "").strip()
+            if value:
+                kwargs[_PARAM_MAP[label]] = value
+        return kwargs
+
+    def perform_search(self, e):
+        kwargs = self._collect_kwargs()
+        self.results_container.controls.clear()
+
+        if not kwargs:
+            self.results_container.controls.append(k.card(
+                k.empty_state("Введите хотя бы один критерий поиска",
+                              icon=ft.Icons.FILTER_ALT,
+                              hint="Например, фамилию — или добавьте уточнения "
+                                   "через «+ Добавить критерий»")))
+            self._page.update()
+            return
+
+        students = _search_like(**kwargs)
+        self.results_container.controls.clear()
+
+        if not students:
+            self.results_container.controls.append(k.card(
+                k.empty_state("Курсанты не найдены",
+                              icon=ft.Icons.PERSON_OFF,
+                              hint="Попробуйте уменьшить число критериев или "
+                                   "указать фамилию частично")))
+            self._page.update()
+            return
+
+        count = len(students)
+        header = ft.Row([
+            ft.Text(f"Найдено курсантов: {count}", size=15,
+                    weight=ft.FontWeight.BOLD, color=k.PRIMARY_DARK),
+            ft.Container(expand=True),
+        ])
+        self.results_container.controls.append(header)
+
+        # Карточки результатов: клик открывает личное дело сразу
+        cards_col = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, height=520)
+        for st in students[:200]:  # защита от гигантского списка
+            sid, first, middle, last = st[0], st[1], st[2], st[3]
+            course, group = st[4], st[5]
+            fio = " ".join(x for x in (last, first, middle) if x)
+            c = k.card(
+                ft.Row([
+                    ft.Icon(ft.Icons.ACCOUNT_CIRCLE, size=34, color=k.PRIMARY),
+                    ft.Column([
+                        ft.Text(fio, size=14, weight=ft.FontWeight.W_600,
+                                color=k.PRIMARY_DARK),
+                        ft.Text(f"Группа: {group or '—'} · Курс: {course or '—'}",
+                                size=12, color=k.MUTED),
+                    ], spacing=2, expand=True),
+                    ft.Icon(ft.Icons.OPEN_IN_NEW, size=18, color=k.MUTED),
+                ], spacing=10),
+                padding=12,
+            )
+            c.ink = True
+            c.tooltip = "Открыть личное дело"
+            c.on_click = lambda ev, i=sid, n=fio: self.open_student(i, n)
+            cards_col.controls.append(c)
+        if count > 200:
+            cards_col.controls.append(ft.Text(
+                f"Показаны первые 200 из {count}. Уточните критерии поиска.",
+                size=12, color=k.WARNING))
+        self.results_container.controls.append(cards_col)
+        self._page.update()
+
+    def open_student(self, student_id, fio):
+        """Переход в личное дело выбранного курсанта."""
+        from pages.registry import get_page
+        pf = get_page("PersonalFilePage")(self._page)
+        pf.selected_student_id = int(student_id)
+        pf.student_search_field.value = fio
+        pf.load_student_data(int(student_id))
+        sh = shell.get_shell()
+        if sh is not None:
+            sh.open_standalone("PersonalFilePage", pf)
+        else:
+            self._page.controls.clear()
+            self._page.add(pf)
+            self._page.update()
+
     def back_to_main(self, e):
         shell.back_to_app(self._page)
