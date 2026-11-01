@@ -11,7 +11,6 @@ parametrized-тестами:
 
 import pytest
 
-
 # ---------- calculate_final_points ----------
 
 POINTS_CASES = [
@@ -45,37 +44,37 @@ POS_KURSANT = ("курсант", "2024-09-01", "1")
 
 def _premia(**kw):
     from pages import premia_calc
-    args = dict(min_grade=None, has_penalties=False, last_position=None,
-                has_failed_subjects=False, has_session_results=True)
+    args = {"min_grade": None, "has_penalties": False, "last_position": None,
+            "has_failed_subjects": False, "has_session_results": True}
     args.update(kw)
     return premia_calc.compute_premia(**args)
 
 
 PREMIA_CASES = [
     # (kwargs, ожидаемый размер, ожидаемое основание в причине)
-    (dict(min_grade="5"), 25, ""),
-    (dict(min_grade="4"), 15, ""),
-    (dict(min_grade="3"), 5, ""),
-    (dict(min_grade="2"), 1, "Неудовлетворительный результат сессии"),
+    ({"min_grade": "5"}, 25, ""),
+    ({"min_grade": "4"}, 15, ""),
+    ({"min_grade": "3"}, 5, ""),
+    ({"min_grade": "2"}, 1, "Неудовлетворительный результат сессии"),
     # провал любого предмета за любую сессию — всегда 1% (наивысший приоритет)
-    (dict(min_grade="5", has_failed_subjects=True), 1,
+    ({"min_grade": "5", "has_failed_subjects": True}, 1,
      "Не допущен, отсутствовал или оценка 2"),
     # взыскание перекривает хорошую оценку, но не перекрывает провал предмета
-    (dict(min_grade="5", has_penalties=True), 1,
+    ({"min_grade": "5", "has_penalties": True}, 1,
      "Наличие дисциплинарного взыскания"),
-    (dict(min_grade="2", has_penalties=True), 1,
+    ({"min_grade": "2", "has_penalties": True}, 1,
      "Неудовлетворительный результат сессии"),
     # нет данных о сессии выбранного семестра
-    (dict(min_grade=None, has_session_results=False), "???", "Нет данных о сессии"),
-    (dict(min_grade=None), "???", "Нет данных о сессии"),
+    ({"min_grade": None, "has_session_results": False}, "???", "Нет данных о сессии"),
+    ({"min_grade": None}, "???", "Нет данных о сессии"),
     # должность сверх курсанта/слушателя -> 25% с приказом в причине
-    (dict(min_grade="3", last_position=POS_CMDR1), 25,
+    ({"min_grade": "3", "last_position": POS_CMDR1}, 25,
      "Занимает должность командира 1 отделения"),
-    (dict(min_grade="3", last_position=POS_KURSANT), 5, ""),
+    ({"min_grade": "3", "last_position": POS_KURSANT}, 5, ""),
     # должность НЕ перекривает взыскание и провал
-    (dict(min_grade="4", has_penalties=True, last_position=POS_CMDR1), 1,
+    ({"min_grade": "4", "has_penalties": True, "last_position": POS_CMDR1}, 1,
      "Наличие дисциплинарного взыскания"),
-    (dict(min_grade="4", has_failed_subjects=True, last_position=POS_CMDR1), 1,
+    ({"min_grade": "4", "has_failed_subjects": True, "last_position": POS_CMDR1}, 1,
      "Не допущен, отсутствовал или оценка 2"),
 ]
 

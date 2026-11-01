@@ -14,7 +14,6 @@ B-1 (серверная проверка прав при мутациях):
 
 import pytest
 
-
 # ---------- B-2: политика паролей ----------
 
 def test_password_policy_rejects_short(db):

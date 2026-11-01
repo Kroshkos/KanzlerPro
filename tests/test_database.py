@@ -16,7 +16,8 @@
 # ---------- Пользователи ----------
 
 def test_add_user_stores_hash_not_plaintext(db):
-    db.add_user("ivanov", "S3cret!", db.DEFAULT_ROLE)
+    # Пароль >= MIN_PASSWORD_LENGTH — политика B-2
+    db.add_user("ivanov", "S3cret!passw0rd", db.DEFAULT_ROLE)
     row = db.execute_query(
         "SELECT password FROM users WHERE username = ?", ("ivanov",), fetch=True)[0]
     assert not str(row["password"]).startswith("S3cret")

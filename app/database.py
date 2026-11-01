@@ -1,13 +1,14 @@
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from access import require_role
 
 # Абсолютный путь к файлу базы данных (не зависит от текущей директории,
 # из которой запущено приложение — раньше БД «терялась» при запуске из другой папки)
 from config import DB_PATH  # единая база приложения kanzler_pro.db
-from access import require_role
-from constants import ADMIN_ROLE, DEFAULT_ROLE
+from constants import ADMIN_ROLE, DEFAULT_ROLE, ROLES
 from security import hash_password, needs_migration, verify_password
 from utils_logger import log_except
 
@@ -192,7 +193,11 @@ def init_db():
     );
     """
     execute_query(query_students)
-    init_mkr_tables()  # таблицы Дорожной карты (MKR) в той же базе
+
+    # ВАЖНО: init_mkr_tables() вызывается ПОСЛЕ создания всех базовых таблиц
+    # (см. конец init_db). Внутри него есть миграция _ensure_lockout_columns(),
+    # которая делает ALTER TABLE users — до создания таблицы users это падало
+    # с «no such table: users».
 
     # Обновленная таблица users с полем role
     query_users = """
@@ -307,6 +312,10 @@ def init_db():
     # Миграция схемы: доводим старые файлы БД к актуальному списку полей.
     migrate_schema()
 
+    # Таблицы Дорожной карты (MKR) в той же базе. Вызывается ПОСЛЕ создания
+    # таблицы users, т.к. внутри выполняется миграция _ensure_lockout_columns.
+    init_mkr_tables()
+
     # Добавление администратора по умолчанию (если его нет).
     # Пароль задаётся переменной окружения KANZLER_ADMIN_PASSWORD,
     # иначе генерируется случайный и выводится один раз при создании.
@@ -383,7 +392,6 @@ def register_failed_attempt(user_id):
         (user_id,), fetch=True)
     attempts = int(rows[0]["fa"]) + 1 if rows else 1
     if attempts >= MAX_FAILED_ATTEMPTS:
-        from datetime import timedelta
         locked_until = (now + timedelta(minutes=LOCKOUT_MINUTES)
                         ).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
         execute_query(
@@ -425,7 +433,14 @@ def check_user(username, password):
             f"Учётка заблокирована на {LOCKOUT_MINUTES} мин после "
             f"{MAX_FAILED_ATTEMPTS} неудачных попыток входа")
     if not verify_password(password, stored_password):
-        register_failed_attempt(user_id)
+        attempts = register_failed_attempt(user_id)
+        # 5-я подряд ошибка ставит метку locked_until — отказ уже со
+        # следующей попытки (проверка выше). Здесь повторяем текст
+        # блокировки, чтобы UI мог показать его сразу, без «шестого клика».
+        if attempts >= MAX_FAILED_ATTEMPTS:
+            raise AccountLockedError(
+                f"Учётка заблокирована на {LOCKOUT_MINUTES} мин после "
+                f"{MAX_FAILED_ATTEMPTS} неудачных попыток входа")
         return None
     if needs_migration(stored_password):
         execute_query("UPDATE users SET password = ? WHERE id = ?",
