@@ -23,7 +23,6 @@ if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
 import flet as ft
-
 from config import ensure_dirs
 from database import init_db
 

@@ -21,21 +21,26 @@
 import os
 from datetime import datetime
 
-from config import REPORTS_DIR
-from database import (execute_query, get_encouragements_by_student,
-                      get_penalties_by_student, get_reviews,
-                      get_student_total_points, get_semester_status,
-                      get_individual_plan, BLOCK_NAMES)
-from utils import to_int
 import repositories as repo
+from config import REPORTS_DIR
+from database import (
+    BLOCK_NAMES,
+    execute_query,
+    get_encouragements_by_student,
+    get_individual_plan,
+    get_penalties_by_student,
+    get_reviews,
+    get_semester_status,
+    get_student_total_points,
+)
+from utils import to_int
 
 try:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm
     from reportlab.lib import colors as rl_colors
-    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                    Table, TableStyle, HRFlowable)
+    from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
     REPORTLAB_AVAILABLE = True
 except ImportError:
     REPORTLAB_AVAILABLE = False

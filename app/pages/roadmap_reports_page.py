@@ -7,12 +7,10 @@
 import os
 
 import flet as ft
-
 from config import REPORTS_DIR
-from database import (search_students_by_name_part, execute_query, log_action)
-from theme import (BG, PRIMARY, SUCCESS, DANGER, TEXT_DARK, TEXT_MUTED,
-                   card, section_title)
-from utils import session_get, show_snack, to_int
+from database import execute_query, log_action, search_students_by_name_part
+from theme import DANGER, PRIMARY, SUCCESS, TEXT_DARK, TEXT_MUTED, card, section_title
+from utils import session_get, to_int
 from utils_logger import log_except
 
 FORMS = [
@@ -96,9 +94,14 @@ class RoadmapReportsPage(ft.Column):
 
     # ---------------- генерация ----------------
     def generate(self, e):
-        from report_generator import (generate_R1, generate_R2, generate_R3,
-                                       generate_R4, generate_R5,
-                                       REPORTLAB_AVAILABLE)
+        from report_generator import (
+            REPORTLAB_AVAILABLE,
+            generate_R1,
+            generate_R2,
+            generate_R3,
+            generate_R4,
+            generate_R5,
+        )
         fmt = self.fmt_dd.value or "xlsx"
         if fmt == "pdf" and not REPORTLAB_AVAILABLE:
             self.status_txt.value = "Для PDF установите: pip install reportlab"
@@ -184,7 +187,8 @@ class RoadmapReportsPage(ft.Column):
     def _open_file(self, path):
         """Открывает файл стандартной программой ОС (для десктоп-режима)."""
         try:
-            import subprocess, sys, platform
+            import subprocess
+            import sys
             if sys.platform == "win32":
                 os.startfile(path)  # type: ignore[attr-defined]
             elif sys.platform == "darwin":

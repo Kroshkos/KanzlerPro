@@ -16,6 +16,8 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: ruff check app main.py tests
       - name: Syntax check (compileall)
         run: python -m compileall -q app main.py
       - name: Tests

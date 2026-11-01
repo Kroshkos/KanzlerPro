@@ -16,7 +16,6 @@
 Flet 1.x "height is unbounded" и пустые экраны.
 """
 
-import flet as ft
 
 #: Активный каркас приложения (ставится KantslerApp при входе и после выхода)
 _current_shell = None

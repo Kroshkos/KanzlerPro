@@ -6,15 +6,17 @@
 """
 
 import flet as ft
-
-from roadmap_rating import (build_rating, rating_summary, get_semesters_with_data,
-                            STEPS_ORDER, ACTIVIST_THRESHOLD, CANDIDATE_THRESHOLD,
-                            RESIDENT_THRESHOLD)
-from database import log_action
-from pages import shell
-from theme import (BG, PRIMARY, SUCCESS, WARNING, VIOLET, TEXT_DARK, TEXT_MUTED,
-                   card, stat_card, section_title)
-from utils import session_get, to_int
+from roadmap_rating import (
+    ACTIVIST_THRESHOLD,
+    CANDIDATE_THRESHOLD,
+    RESIDENT_THRESHOLD,
+    STEPS_ORDER,
+    build_rating,
+    get_semesters_with_data,
+    rating_summary,
+)
+from theme import PRIMARY, SUCCESS, TEXT_DARK, TEXT_MUTED, VIOLET, WARNING, card, stat_card
+from utils import to_int
 
 STEP_COLORS = {
     "Участник": TEXT_MUTED,

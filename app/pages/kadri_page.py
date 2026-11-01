@@ -1,22 +1,25 @@
-import flet as ft
-import pandas as pd
+import base64
+
 # tkinter используется только для диалога выбора пути сохранения файлов;
 # импорт выполняется лениво внутри методов, чтобы приложение запускалось
 # даже на системах без установленной среды X11/tkinter.
 import os
-import shutil
-import base64
-from openpyxl.utils import get_column_letter
-from datetime import datetime, timedelta
-from database import get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
+from datetime import datetime
+
+import flet as ft
+import photo_storage
+
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
+from constants import EDITABLE_STUDENT_FIELDS
+from database import (
+    get_students,
+    log_action,
+)
 from repositories import update_student_fields
-import photo_storage
-from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
-from pages.registry import get_page
+from utils import session_get, show_snack, to_int
+
 from pages import shell
-from utils import session_get, session_set, session_clear, show_snack, to_int, to_num
 
 
 class KadriWorkPage(ft.Column):
@@ -1327,9 +1330,9 @@ class EditStudentPage(ft.Column):
                     val = format_date(val)
                 updates[fname] = val
             # fields уже отфильтрован по схеме (см. save()), на всякий случай
-            # оставляем только реально существующие колонки. student — это
-            # sqlite3.Row: .keys() даёт имена колонок, set(row) был бы ошибкой.
-            existing = set(student.keys())
+            # оставляем только реально существующие колонки. get_student_columns()
+            # возвращает список имён колонок таблицы students (белый список).
+            existing = set(repo.get_student_columns())
             updates = {k: v for k, v in updates.items() if k in existing}
 
             ok = update_student_fields(self.student_id, updates)

@@ -14,14 +14,14 @@
 """
 
 import flet as ft
-
-from pages.registry import get_page
-from pages import shell
-from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED
-from utils import session_get, session_clear, to_num, to_int
+from authz import ADMIN_ONLY_PAGES, is_admin, require_admin
 from database import log_action
-from authz import is_admin, require_admin, ADMIN_ONLY_PAGES
+from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED
+from utils import session_clear, session_get, to_int, to_num
 from utils_logger import log_except
+
+from pages import shell
+from pages.registry import get_page
 
 
 class KantslerApp(ft.Column):

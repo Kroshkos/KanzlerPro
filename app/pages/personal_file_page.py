@@ -1,21 +1,21 @@
-import flet as ft
-import pandas as pd
 # tkinter используется только для диалога выбора пути сохранения файлов;
 # импорт выполняется лениво внутри методов, чтобы приложение запускалось
 # даже на системах без установленной среды X11/tkinter.
 import os
-import shutil
-from openpyxl.utils import get_column_letter
-from datetime import datetime, timedelta
-from database import get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
+
+import flet as ft
+import photo_storage
+
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
-import photo_storage
-from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
-from pages.registry import get_page
-from pages import shell
-from utils import show_snack, to_int, session_get
+from database import (
+    log_action,
+    search_students_by_name_part,
+)
+from utils import session_get, show_snack, to_int
 from utils_logger import log_except
+
+from pages import shell
 
 
 def session_username(page_obj):
@@ -67,7 +67,8 @@ class PersonalFilePage(ft.Column):
                    f"Печать личного дела (PDF): student_id={sid}")
         # Десктоп: открыть стандартной программой + предложить сохранить.
         try:
-            import subprocess, sys
+            import subprocess
+            import sys
             if sys.platform == "win32":
                 os.startfile(path)  # type: ignore[attr-defined]
             elif sys.platform == "darwin":
@@ -540,7 +541,8 @@ class PersonalFilePage(ft.Column):
         log_action(session_username(self._page),
                    f"Пакетная печать личных дел (PDF): {len(ids)} шт.")
         try:
-            import subprocess, sys
+            import subprocess
+            import sys
             if sys.platform == "win32":
                 os.startfile(path)  # type: ignore[attr-defined]
             elif sys.platform == "darwin":

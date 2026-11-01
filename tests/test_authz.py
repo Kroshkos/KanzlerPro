@@ -6,8 +6,6 @@ Flet-объекты не нужны: require_admin при отказе импо�
 
 import types
 
-import pytest
-
 import authz
 from constants import ADMIN_ROLE, DEFAULT_ROLE
 

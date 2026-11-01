@@ -6,14 +6,12 @@
 """
 
 import flet as ft
-
-from global_search import global_search, total_found
-from theme import PRIMARY, SUCCESS, WARNING, DANGER, TEXT_DARK, TEXT_MUTED, card
-from pages import shell
-from pages.registry import get_page
 from database import log_action
+from global_search import global_search, total_found
+from theme import DANGER, PRIMARY, SUCCESS, TEXT_DARK, TEXT_MUTED, WARNING, card
 from utils_logger import log_except
 
+from pages import shell
 
 REVIEW_STATUS = {
     "pending": ("На рассмотрении", WARNING),

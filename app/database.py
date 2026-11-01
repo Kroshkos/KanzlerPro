@@ -3,12 +3,11 @@ import re
 import sqlite3
 from datetime import datetime
 
-from constants import ADMIN_ROLE, DEFAULT_ROLE
-from security import hash_password, verify_password, needs_migration
-
 # Абсолютный путь к файлу базы данных (не зависит от текущей директории,
 # из которой запущено приложение — раньше БД «терялась» при запуске из другой папки)
 from config import DB_PATH  # единая база приложения kanzler_pro.db
+from constants import ADMIN_ROLE, DEFAULT_ROLE
+from security import hash_password, needs_migration, verify_password
 
 # Имя таблицы только из разрешённых символов — защита от SQL-инъекций
 # в служебных запросах PRAGMA (имя колонки подставить параметром нельзя).

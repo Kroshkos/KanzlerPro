@@ -15,10 +15,10 @@ photo_path() резолвит путь строго внутри PHOTOS_DIR (з�
 traversal при повреждённых/ручных значениях o_photo).
 """
 
-import os
-import re
 import base64
 import binascii
+import os
+import re
 
 from config import PHOTOS_DIR
 

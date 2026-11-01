@@ -6,15 +6,25 @@
 точкой входа во все модули.
 """
 
-import flet as ft
 from datetime import datetime
 
-from database import get_roadmap_stats, get_logs
-from pages.registry import get_page
-from theme import (BG, PRIMARY, SUCCESS, WARNING, DANGER, VIOLET, INFO,
-                   TEXT_DARK, TEXT_MUTED, card, stat_card, section_title)
-from utils import session_get
+import flet as ft
 from authz import is_admin
+from database import get_logs, get_roadmap_stats
+from theme import (
+    BG,
+    INFO,
+    PRIMARY,
+    SUCCESS,
+    TEXT_DARK,
+    TEXT_MUTED,
+    VIOLET,
+    WARNING,
+    card,
+    section_title,
+    stat_card,
+)
+from utils import session_get
 
 
 def _wrap(page_obj, control):

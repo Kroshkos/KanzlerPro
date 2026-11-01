@@ -15,21 +15,20 @@ import os
 from datetime import datetime
 
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-
 from config import REPORTS_DIR
-from roadmap_rating import build_rating, rating_summary, STEPS_ORDER
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from roadmap_rating import STEPS_ORDER, build_rating, rating_summary
 
 try:
-    from reportlab.lib.pagesizes import letter, landscape
-    from reportlab.lib.units import inch
     from reportlab.lib import colors as rl_colors
-    from reportlab.platypus import (SimpleDocTemplate, Table as RlTable,
-                                    TableStyle, Paragraph, Spacer)
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import landscape, letter
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import inch
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, TableStyle
+    from reportlab.platypus import Table as RlTable
     REPORTLAB_AVAILABLE = True
 except ImportError:
     REPORTLAB_AVAILABLE = False
