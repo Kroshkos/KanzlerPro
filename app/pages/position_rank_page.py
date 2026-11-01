@@ -12,9 +12,16 @@ from database import (
     log_action,
     search_students_by_name_part,
 )
+from access import PermissionDeniedError
 from utils import session_get, show_snack, to_int
 
 from pages import shell
+
+
+def _deny_position_snack(page):
+    """B-1: единый ответ на отказ серверного слоя прав."""
+    show_snack(page, "Недостаточно прав: действие доступно только администратору")
+    page.update()
 
 
 class PositionChangePage(ft.Column):
@@ -172,7 +179,14 @@ class PositionChangePage(ft.Column):
             return
 
         # Добавляем запись об изменении должности в базу данных
-        repo.add_position(self.selected_student_id, position, assigned_by, date_obj, order_number)
+        # B-1: серверная проверка прав — роль из сессии
+        try:
+            repo.add_position(self.selected_student_id, position, assigned_by,
+                              date_obj, order_number,
+                              actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            _deny_position_snack(self._page)
+            return
         session_get(log_action(self._page, "username"), f"Добавлено изменение должности для студента {self.selected_student_id} c {self.position_history_table.rows[-1][0]} на {position}")
 
         # Обновляем таблицу с историей изменений должностей
@@ -377,7 +391,14 @@ class RankChangePage(ft.Column):
             return
 
         # Добавляем запись об изменении звания в базу данных
-        repo.add_rank(self.selected_student_id, rank, assigned_by, date_obj, order_number)
+        # B-1: серверная проверка прав — роль из сессии
+        try:
+            repo.add_rank(self.selected_student_id, rank, assigned_by,
+                          date_obj, order_number,
+                          actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            _deny_position_snack(self._page)
+            return
         session_get(log_action(self._page, "username"), f"Добавлено изменение должности для студента {self.selected_student_id} c {self.rank_history_table.rows[-1][0]} на {rank}")
 
         # Обновляем таблицу с историей изменений должностей

@@ -27,9 +27,16 @@ class _Page:
         self.controls.extend(c)
 
 
+def _admin():
+    """B-1 (ALLOW_UNSCOPED=False): администратор нужен для мутаторов."""
+    from constants import ADMIN_ROLE
+
+    return {"role": ADMIN_ROLE}
+
+
 @pytest.fixture()
 def fake_page():
-    return _Page()
+    return _Page(_admin())
 
 
 def _make_student(surname, name, middlename, group, course):
@@ -37,7 +44,7 @@ def _make_student(surname, name, middlename, group, course):
     repo.add_student({
         "o_surname": surname, "o_name": name, "o_lastname": middlename,
         "o_group_name": group, "o_course": course,
-    })
+    }, actor_role=_admin()["role"])
 
 
 class TestSearchPage:
@@ -125,7 +132,7 @@ class TestLoginPage:
     def test_login_wrong_password_shows_error(self, db, fake_page):
         from database import add_user
         from pages.login_page import LoginPage
-        add_user("boss", "secret123", "Администратор")
+        add_user("boss", "secret123", "Администратор", actor_role="Администратор")
         lp = LoginPage(fake_page)
         lp.username.value = "boss"
         lp.password.value = "WRONG"

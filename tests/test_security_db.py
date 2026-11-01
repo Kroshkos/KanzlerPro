@@ -18,24 +18,24 @@ import pytest
 
 def test_password_policy_rejects_short(db):
     with pytest.raises(db.PasswordPolicyError):
-        db.add_user("shorty", "abc")           # < MIN_PASSWORD_LENGTH
+        db.add_user("shorty", "abc", actor_role=db.ADMIN_ROLE)           # < MIN_PASSWORD_LENGTH
     with pytest.raises(db.PasswordPolicyError):
-        db.add_user("ok1", "x" * 3)            # тоже короткий
+        db.add_user("ok1", "x" * 3, actor_role=db.ADMIN_ROLE)            # тоже короткий
     with pytest.raises(db.PasswordPolicyError):
-        db.add_user("ok2", "")                 # пустой — не для 'admin'
+        db.add_user("ok2", "", actor_role=db.ADMIN_ROLE)                 # пустой — не для 'admin'
 
 
 def test_password_policy_allows_long(db):
-    db.add_user("good", "s3cret-pass", "Пользователь")  # >= 8 символов
+    db.add_user("good", "s3cret-pass", "Пользователь", actor_role=db.ADMIN_ROLE)  # >= 8 символов
     assert db.check_user("good", "s3cret-pass") is not None
 
 
 def test_update_password_enforces_policy(db):
-    db.add_user("petrov2", "firstpassword", "Пользователь")
+    db.add_user("petrov2", "firstpassword", "Пользователь", actor_role=db.ADMIN_ROLE)
     uid = db.execute_query(
         "SELECT id FROM users WHERE username='petrov2'", fetch=True)[0]["id"]
     with pytest.raises(db.PasswordPolicyError):
-        db.update_user_password(uid, "tiny")
+        db.update_user_password(uid, "tiny", actor_role=db.ADMIN_ROLE)
     # старый пароль после отказа должен работать
     assert db.check_user("petrov2", "firstpassword") is not None
 
@@ -43,7 +43,7 @@ def test_update_password_enforces_policy(db):
 # ---------- B-2: блокировка при переборе ----------
 
 def test_lockout_after_failed_attempts(db):
-    db.add_user("victim", "correct-horse", "Пользователь")
+    db.add_user("victim", "correct-horse", "Пользователь", actor_role=db.ADMIN_ROLE)
     for _ in range(db.MAX_FAILED_ATTEMPTS - 1):
         assert db.check_user("victim", "wrong-pwd") is None
     # последняя попытка из лимита: не None, а блокировка
@@ -55,7 +55,7 @@ def test_lockout_after_failed_attempts(db):
 
 
 def test_successful_login_resets_counter(db):
-    db.add_user("resilient", "correct-horse", "Пользователь")
+    db.add_user("resilient", "correct-horse", "Пользователь", actor_role=db.ADMIN_ROLE)
     for _ in range(db.MAX_FAILED_ATTEMPTS - 1):
         db.check_user("resilient", "wrong-pwd")
     assert db.check_user("resilient", "correct-horse") is not None
@@ -83,8 +83,8 @@ def _user_id(db, username):
 def test_mutations_denied_for_non_admin(db, actor_role):
     from access import PermissionDeniedError
     from constants import ADMIN_ROLE, DEFAULT_ROLE
-    db.add_user("boss", "adminpass123", ADMIN_ROLE)
-    db.add_user("regular", "userpass123", DEFAULT_ROLE)
+    db.add_user("boss", "adminpass123", ADMIN_ROLE, actor_role=ADMIN_ROLE)
+    db.add_user("regular", "userpass123", DEFAULT_ROLE, actor_role=ADMIN_ROLE)
     uid = _user_id(db, "regular")
 
     with pytest.raises(PermissionDeniedError):
@@ -106,7 +106,7 @@ def test_mutations_denied_for_non_admin(db, actor_role):
 
 def test_mutations_allowed_for_admin(db):
     from constants import ADMIN_ROLE, DEFAULT_ROLE
-    db.add_user("boss2", "adminpass123", ADMIN_ROLE)
+    db.add_user("boss2", "adminpass123", ADMIN_ROLE, actor_role=ADMIN_ROLE)
     db.add_user("target", "targetpass123", DEFAULT_ROLE,
                 actor_role=ADMIN_ROLE)
     uid = _user_id(db, "target")
@@ -120,25 +120,28 @@ def test_mutations_allowed_for_admin(db):
 def test_role_whitelist_on_update(db):
     from access import PermissionDeniedError  # noqa: F401  (импорт-страховка)
     from constants import ADMIN_ROLE
-    db.add_user("boss3", "adminpass123", ADMIN_ROLE)
+    db.add_user("boss3", "adminpass123", ADMIN_ROLE, actor_role=ADMIN_ROLE)
     uid = _user_id(db, "boss3")
     with pytest.raises(ValueError):
         db.update_user_role(uid, "Суперпользователь", actor_role=ADMIN_ROLE)
 
 
-def test_unscoped_mode_flag(db):
-    """ALLOW_UNSCOPED=True разрешает легаси-вызовы без роли (переходный
-    период B-1); при False те же вызовы должны падать."""
+def test_unscoped_mode_denied(db):
+    """B-1 ужесточено: ALLOW_UNSCOPED=False — вызовы мутаторов без роли
+    (легаси, сессия не проброшена) падают с PermissionDeniedError."""
     import access
-    if not access.ALLOW_UNSCOPED:
-        pytest.skip("режим совместимости уже отключён")
-    db.add_user("legacy_call", "pwd123456")  # без actor_role — разрешено
-    access.ALLOW_UNSCOPED = False
-    try:
-        with pytest.raises(access.PermissionDeniedError):
-            db.add_user("blocked_call", "pwd123456")
-    finally:
-        access.ALLOW_UNSCOPED = True
+    assert access.ALLOW_UNSCOPED is False, \
+        "после перевода всех страниц на actor_role флаг должен быть выключен"
+    with pytest.raises(access.PermissionDeniedError):
+        db.add_user("legacy_call", "pwd123456")           # без actor_role
+    with pytest.raises(access.PermissionDeniedError):
+        db.delete_user(1)                                 # без actor_role
+    with pytest.raises(access.PermissionDeniedError):
+        db.add_achievement("X9", 1, "Тест", 5)            # без actor_role
+    # данные не изменились
+    assert db.execute_query(
+        "SELECT id FROM users WHERE username='legacy_call'",
+        fetch=True) == []
 
 
 # ---------- B-1: расширенные мутаторы (ВПР и Дорожная карта) ----------
@@ -304,7 +307,7 @@ def test_add_review_denied_for_non_admin(db, actor_role):
     """B-1: регистрация достижения (add_review) проверяет права на сервере."""
     from access import PermissionDeniedError
     sid = _first_student_id(db)
-    db.add_achievement("A1", 1, "Тест", 10, actor_role=None)
+    db.add_achievement("A1", 1, "Тест", 10, actor_role=db.ADMIN_ROLE)
     with pytest.raises(PermissionDeniedError):
         db.add_review(sid, "A1", 1, actor_role=actor_role)
     assert db.get_reviews(student_id=sid) == []
@@ -317,3 +320,53 @@ def test_add_review_allowed_for_admin(db):
     db.add_review(sid, "A1", 1, actor_role=ADMIN_ROLE)
     rows = db.get_reviews(student_id=sid)
     assert len(rows) == 1 and rows[0]["status"] == "pending"
+
+
+# --- B-1: репозиторные мутаторы (позиции, звания, удаление курсанта) ------
+
+@pytest.mark.parametrize("actor_role", ["Пользователь", "Гость"])
+def test_position_rank_mutations_denied_for_non_admin(db, actor_role):
+    """B-1: добавление должности/звания проверяет права на сервере."""
+    import repositories as repo
+    from access import PermissionDeniedError
+    sid = _first_student_id(db)
+    with pytest.raises(PermissionDeniedError):
+        repo.add_position(sid, "командир", "boss", "2026-01-01", "№1",
+                          actor_role=actor_role)
+    with pytest.raises(PermissionDeniedError):
+        repo.add_rank(sid, "лейтенант", "boss", "2026-01-02", "№2",
+                      actor_role=actor_role)
+    assert repo.get_position_history(sid) == []
+    assert repo.get_rank_history(sid) == []
+
+
+def test_position_rank_mutations_allowed_for_admin(db):
+    import repositories as repo
+    from constants import ADMIN_ROLE
+    sid = _first_student_id(db)
+    repo.add_position(sid, "командир", "boss", "2026-01-01", "№1",
+                      actor_role=ADMIN_ROLE)
+    repo.add_rank(sid, "лейтенант", "boss", "2026-01-02", "№2",
+                  actor_role=ADMIN_ROLE)
+    assert len(repo.get_position_history(sid)) == 1
+    assert len(repo.get_rank_history(sid)) == 1
+
+
+@pytest.mark.parametrize("actor_role", ["Пользователь", "Гость"])
+def test_delete_student_denied_for_non_admin(db, actor_role):
+    """B-1: полное удаление курсанта — только администратору."""
+    import repositories as repo
+    from access import PermissionDeniedError
+    sid = _first_student_id(db)
+    with pytest.raises(PermissionDeniedError):
+        repo.delete_student(sid, actor_role=actor_role)
+    # курсант на месте
+    assert repo.get_student_full(sid) is not None
+
+
+def test_delete_student_allowed_for_admin(db):
+    import repositories as repo
+    from constants import ADMIN_ROLE
+    sid = _first_student_id(db)
+    assert repo.delete_student(sid, actor_role=ADMIN_ROLE) is True
+    assert repo.get_student_full(sid) is None

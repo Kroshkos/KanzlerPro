@@ -19,6 +19,8 @@ allowance и т.д.).
 """
 
 
+from access import require_role
+from constants import ADMIN_ROLE
 from database import execute_query
 
 Row = tuple
@@ -28,8 +30,13 @@ Row = tuple
 
 
 def add_position(student_id: int, position: str, assigned_by: str,
-                 date_str: str, order_number: str) -> None:
-    """Добавляет запись об изменении должности."""
+                 date_str: str, order_number: str,
+                 actor_role=None) -> None:
+    """Добавляет запись об изменении должности.
+
+    B-1: серверная проверка прав — мутация доступна только администратору.
+    """
+    require_role(actor_role, ADMIN_ROLE, action="добавление должности")
     execute_query(
         """INSERT INTO position_history
            (student_id, position, assigned_by, date, order_number)
@@ -51,8 +58,13 @@ def get_position_history(student_id: int) -> list[Row]:
 
 
 def add_rank(student_id: int, rank: str, assigned_by: str,
-             date_str: str, order_number: str) -> None:
-    """Добавляет запись об изменении воинского звания."""
+             date_str: str, order_number: str,
+             actor_role=None) -> None:
+    """Добавляет запись об изменении воинского звания.
+
+    B-1: серверная проверка прав — мутация доступна только администратору.
+    """
+    require_role(actor_role, ADMIN_ROLE, action="добавление звания")
     execute_query(
         """INSERT INTO rank_history
            (student_id, rank, assigned_by, date, order_number)
@@ -381,14 +393,20 @@ def add_student(student_data: dict, actor_role=None) -> int:
     return _db_add_student(student_data, actor_role=actor_role)
 
 
-def delete_student(student_id: int) -> bool:
+def delete_student(student_id: int, actor_role=None) -> bool:
     """Полностью удалить курсанта и связанные записи (каскад вручную).
 
     Используется там, где нужен РЕАЛЬНЫЙ DELETE (например, отклонённая заявка
     с status="deleted"), а не мягкое удаление флагом. Дочерние таблицы без FK-
     каскада чистятся явно, чтобы не оставлять сиротские строки. Файл фото —
     через photo_storage.delete_photo() (вызывающая сторона передаёт o_photo).
+
+    B-1: серверная проверка прав — удаление доступно только администратору.
     """
+    from access import require_role
+    from constants import ADMIN_ROLE
+
+    require_role(actor_role, ADMIN_ROLE, action="удаление курсанта")
     from database import connect_to_db
 
     conn = connect_to_db()

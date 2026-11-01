@@ -66,7 +66,8 @@ def seeded(db):
                           "o_lastname": "Иванович", "o_course": 1,
                           "o_group_name": "А-1"})
     db.add_achievement("A1", 1, "Меткий выстрел", 10,
-                       version="", calc_type="ms")
+                       version="", calc_type="ms",
+                       actor_role=db.ADMIN_ROLE)
     return db, sid
 
 
