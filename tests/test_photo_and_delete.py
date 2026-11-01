@@ -35,7 +35,7 @@ def test_save_photo_writes_file_not_base64(photo_env):
     sid = repo.add_student({"o_surname": "А", "o_name": "Б", "o_lastname": "В"}, actor_role='Администратор')
     name = ps.save_photo(b"\xff\xd8fakejpeg", sid, "jpg")
     assert name == f"{sid}.jpg"
-    repo.update_student_fields(sid, {"o_photo": name})
+    repo.update_student_fields(sid, {"o_photo": name}, actor_role='Администратор')
     cols = repo.get_student_columns()
     row = repo.get_student_full(sid)
     assert row[cols.index("o_photo")] == name
@@ -67,12 +67,12 @@ def test_get_student_columns_matches_select_star(photo_env):
 def test_delete_student_cascades_child_rows(photo_env):
     db, _ps, repo = photo_env
     sid = repo.add_student({"o_surname": "Ю", "o_name": "Я"}, actor_role='Администратор')
-    repo.add_position(sid, "командир", "admin", "2026-01-01", "1")
-    repo.add_rank(sid, "лейтенант", "admin", "2026-01-02", "2")
+    repo.add_position(sid, "командир", "admin", "2026-01-01", "1", actor_role=db.ADMIN_ROLE)
+    repo.add_rank(sid, "лейтенант", "admin", "2026-01-02", "2", actor_role=db.ADMIN_ROLE)
     db.add_encouragement(sid, "грамота", "за успехи", "admin", "2026-01-03", "3", actor_role=db.ADMIN_ROLE)
     db.add_penalty(sid, "выговор", "за опоздание", "2026-01-04", "admin", "2026-01-05", "4", actor_role=db.ADMIN_ROLE)
 
-    assert repo.delete_student(sid) is True
+    assert repo.delete_student(sid, actor_role=db.ADMIN_ROLE) is True
     assert repo.get_student_full(sid) is None
     assert repo.get_position_history(sid) == []
     assert repo.get_rank_history(sid) == []
@@ -80,7 +80,7 @@ def test_delete_student_cascades_child_rows(photo_env):
     assert db.get_penalties_by_student(sid) == []
     # Чужие данные не задеты
     other = repo.add_student({"o_surname": "Другой"}, actor_role='Администратор')
-    assert repo.delete_student(999999) is False
+    assert repo.delete_student(999999, actor_role=db.ADMIN_ROLE) is False
     assert repo.get_student_full(other) is not None
 
 
@@ -98,7 +98,7 @@ def test_edit_page_keys_pattern(photo_env):
     existing = set(student.keys())
     filtered = {k: v for k, v in updates.items() if k in existing}
     assert filtered == {"o_surname": "Новая"}
-    assert repo.update_student_fields(sid, filtered) is True
+    assert repo.update_student_fields(sid, filtered, actor_role='Администратор') is True
     cols = repo.get_student_columns()
     row2 = repo.get_student_full(sid)
     assert row2[cols.index("o_surname")] == "Новая"

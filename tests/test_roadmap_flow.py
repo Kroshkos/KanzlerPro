@@ -64,7 +64,7 @@ def seeded(db):
     """Курсант + достижение в каталоге (10 баллов, тип ms)."""
     sid = db.add_student({"o_surname": "Петров", "o_name": "Иван",
                           "o_lastname": "Иванович", "o_course": 1,
-                          "o_group_name": "А-1"})
+                          "o_group_name": "А-1"}, actor_role=db.ADMIN_ROLE)
     db.add_achievement("A1", 1, "Меткий выстрел", 10,
                        version="", calc_type="ms",
                        actor_role=db.ADMIN_ROLE)

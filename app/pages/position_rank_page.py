@@ -8,11 +8,11 @@ import flet as ft
 
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
+from access import PermissionDeniedError
 from database import (
     log_action,
     search_students_by_name_part,
 )
-from access import PermissionDeniedError
 from utils import session_get, show_snack, to_int
 
 from pages import shell

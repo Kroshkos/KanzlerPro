@@ -16,9 +16,9 @@ class _FakeSession(dict):
 class _Page:
     """Минимальная заглушка ft.Page: update()/add() — no-op."""
 
-    def __init__(self):
+    def __init__(self, session=None):
         self.controls = []
-        self.session = _FakeSession()
+        self.session = _FakeSession(session or {})
 
     def update(self):
         pass

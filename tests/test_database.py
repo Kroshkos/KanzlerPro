@@ -53,7 +53,7 @@ def test_update_user_password_rehashes(db):
     db.add_user("petrov", "oldpassword1", "Пользователь", actor_role=db.ADMIN_ROLE)
     uid = db.execute_query("SELECT id FROM users WHERE username='petrov'",
                            fetch=True)[0]["id"]
-    db.update_user_password(uid, "newpassword2")
+    db.update_user_password(uid, "newpassword2", actor_role=db.ADMIN_ROLE)
     assert db.check_user("petrov", "oldpassword1") is None
     assert db.check_user("petrov", "newpassword2") is not None
 
