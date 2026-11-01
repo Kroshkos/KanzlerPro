@@ -18,6 +18,7 @@ import openpyxl
 from config import REPORTS_DIR
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from roadmap_rating import STEPS_ORDER, build_rating, rating_summary
+from utils_logger import log_except
 
 try:
     from reportlab.lib import colors as rl_colors

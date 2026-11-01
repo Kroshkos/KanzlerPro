@@ -3,13 +3,12 @@ import re
 import sqlite3
 from datetime import datetime
 
-from utils_logger import log_except
-
 # Абсолютный путь к файлу базы данных (не зависит от текущей директории,
 # из которой запущено приложение — раньше БД «терялась» при запуске из другой папки)
 from config import DB_PATH  # единая база приложения kanzler_pro.db
 from constants import ADMIN_ROLE, DEFAULT_ROLE
 from security import hash_password, needs_migration, verify_password
+from utils_logger import log_except
 
 # Имя таблицы только из разрешённых символов — защита от SQL-инъекций
 # в служебных запросах PRAGMA (имя колонки подставить параметром нельзя).
@@ -1135,7 +1134,7 @@ def calculate_final_points(calc_type, base_points, k_ur=1.0, k_role=1.0,
         float(k_vn or 1) * float(k_st or 1)
     if calc_type == "month":
         total = total * max(int(duration_months or 0), 1)
-    return int(round(total + int(ip_bonus or 0)))
+    return round(total + int(ip_bonus or 0))
 
 
 def count_pending_reviews():

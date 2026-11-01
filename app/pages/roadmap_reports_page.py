@@ -8,7 +8,7 @@ import os
 
 import flet as ft
 from config import REPORTS_DIR
-from database import execute_query, log_action, search_students_by_name_part
+from database import log_action, search_students_by_name_part
 from theme import DANGER, PRIMARY, SUCCESS, TEXT_DARK, TEXT_MUTED, card, section_title
 from utils import session_get, to_int
 from utils_logger import log_except

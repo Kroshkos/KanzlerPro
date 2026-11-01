@@ -41,7 +41,6 @@ class TestMapLastPositionsAndRanks:
         assert rm[s2] == "старший лейтенант"
 
         # согласованность с поштучными версиями
-        single = db.repo_get_last_position(s1) if hasattr(db, "repo_get_last_position") else None
         assert pm.get(s2) is None  # у второго нет истории должностей
 
     def test_empty_input_no_query(self, repo):
