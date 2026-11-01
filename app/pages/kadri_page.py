@@ -13,11 +13,7 @@ import photo_storage
 import repositories as repo
 from access import PermissionDeniedError
 from constants import EDITABLE_STUDENT_FIELDS
-from database import (
-    get_students,
-    log_action,
-)
-from repositories import update_student_fields
+from database import log_action
 from utils import session_get, show_snack, to_int
 from utils_logger import log_except
 
@@ -1166,6 +1162,12 @@ class AddStudentPage(ft.Column):
         shell.back_to_app(self._page)
 
 class ShowStudentsPage(ft.Column):
+    """Список курсантов с постраничной навигацией (пункт C-1 бэклога).
+
+    Чекбоксы хранения выбора живут в словаре self.checkboxes независимо от
+    страницы: выбор сохраняется при листании.
+    """
+
     def __init__(self, page, parent=None):
         super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
@@ -1174,24 +1176,20 @@ class ShowStudentsPage(ft.Column):
             "Редактировать выбранного", icon=ft.Icons.EDIT,
             on_click=self.edit_selected_click)
 
-        students = get_students()
-        self.checkboxes = {}
-        rows = []
-        for student in students:
-            # sqlite3.Row: доступ по именам колонок (см. database.execute_query)
-            sid = student["id"]
-            cb = ft.Checkbox(value=False)
-            self.checkboxes[sid] = cb
-            rows.append(ft.DataRow(cells=[
-                ft.DataCell(cb),
-                ft.DataCell(str(sid)),
-                ft.DataCell(str(student["o_surname"] or "")),
-                ft.DataCell(str(student["o_name"] or "")),
-                ft.DataCell(str(student["o_lastname"] or "")),
-                ft.DataCell("" if student["o_course"] is None else str(student["o_course"])),
-                ft.DataCell(str(student["o_group_name"] or "")),
-            ]))
+        from database import STUDENTS_PAGE_SIZE, count_students
+        self.page_size = STUDENTS_PAGE_SIZE
+        self.total = count_students()
+        self.total_pages = max(1, -(-self.total // self.page_size))  # ceil
+        self.current_page = 0
 
+        self.checkboxes = {}
+        self.prev_button = ft.IconButton(
+            ft.Icons.CHEVRON_LEFT, on_click=self.prev_page_click,
+            tooltip="Предыдущая страница")
+        self.next_button = ft.IconButton(
+            ft.Icons.CHEVRON_RIGHT, on_click=self.next_page_click,
+            tooltip="Следующая страница")
+        self.page_label = ft.Text("", weight="bold")
         self.data_grid = ft.DataTable(
             columns=[
                 ft.DataColumn(label=ft.Text("Выбор")),
@@ -1202,14 +1200,61 @@ class ShowStudentsPage(ft.Column):
                 ft.DataColumn(label=ft.Text("Курс набора")),
                 ft.DataColumn(label=ft.Text("Группа")),
             ],
-            rows=rows,
+            rows=[],
         )
 
         self.controls = [
             ft.Text("Список курсантов", size=20, weight="bold"),
             ft.Row([self.edit_button, self.back_button]),
+            self._build_pager_row(),
             self.data_grid,
         ]
+        self._load_page()
+
+    def _build_pager_row(self):
+        return ft.Row(
+            [self.prev_button, self.page_label, self.next_button],
+            alignment=ft.MainAxisAlignment.CENTER)
+
+    def _load_page(self):
+        """Загружает текущую страницу курсантов и обновляет состояние."""
+        from database import get_students
+        offset = self.current_page * self.page_size
+        students = get_students(limit=self.page_size, offset=offset) or []
+        rows = []
+        for student in students:
+            # sqlite3.Row: доступ по именам колонок (см. database.execute_query)
+            sid = student["id"]
+            # выбор сохраняется между страницами: переиспользуем чекбокс
+            cb = self.checkboxes.get(sid) or ft.Checkbox(value=False)
+            self.checkboxes[sid] = cb
+            rows.append(ft.DataRow(cells=[
+                ft.DataCell(cb),
+                ft.DataCell(str(sid)),
+                ft.DataCell(str(student["o_surname"] or "")),
+                ft.DataCell(str(student["o_name"] or "")),
+                ft.DataCell(str(student["o_lastname"] or "")),
+                ft.DataCell("" if student["o_course"] is None else str(student["o_course"])),
+                ft.DataCell(str(student["o_group_name"] or "")),
+            ]))
+        self.data_grid.rows = rows
+        self.page_label.value = (
+            f"Стр. {self.current_page + 1} из {self.total_pages} "
+            f"(всего: {self.total})")
+        self.prev_button.disabled = self.current_page == 0
+        self.next_button.disabled = self.current_page >= self.total_pages - 1
+
+    def prev_page_click(self, e):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self._load_page()
+            self._page.update()
+
+    def next_page_click(self, e):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+            self._load_page()
+            self._page.update()
 
     def _selected_ids(self):
         return [sid for sid, cb in self.checkboxes.items() if cb.value]
@@ -1348,7 +1393,7 @@ class EditStudentPage(ft.Column):
             updates = {k: v for k, v in updates.items() if k in existing}
 
             # B-1: серверная проверка прав — роль из сессии
-            ok = update_student_fields(self.student_id, updates,
+            ok = repo.update_student_fields(self.student_id, updates,
                                        actor_role=session_get(self._page, "role"))
             msg = "Изменения сохранены" if ok else "Нет изменённых полей"
             show_snack(self._page, ft.Text(msg))

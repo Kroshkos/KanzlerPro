@@ -1088,9 +1088,25 @@ def add_student(student_data, actor_role=None):
 # которое переопределяло корректную версию выше (см. строку ~272) и ломало
 # авторизацию. Дубликат удалён.
 
-def get_students():
-    query = "SELECT id, o_surname, o_name, o_lastname, o_course, o_group_name FROM students"
-    return execute_query(query, fetch=True)
+STUDENTS_PAGE_SIZE = 50
+
+
+def count_students():
+    """Общее число курсантов (для расчёта количества страниц пагинации)."""
+    row = execute_query("SELECT COUNT(*) AS c FROM students", fetch=True)
+    return int(row[0]["c"]) if row else 0
+
+
+def get_students(limit=None, offset=0):
+    """Список курсантов. limit=None — все записи (обратная совместимость),
+    иначе — страница размером limit со смещением offset (пагинация, C-1)."""
+    query = ("SELECT id, o_surname, o_name, o_lastname, o_course, o_group_name "
+             "FROM students ORDER BY id")
+    params = ()
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params = (int(limit), int(offset))
+    return execute_query(query, params=params, fetch=True)
 
 
 # --- Глобальный поиск: выборки всех записей с ФИО (для app/global_search.py).
