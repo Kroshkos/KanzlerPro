@@ -177,3 +177,35 @@ def photo_src(value: str) -> str:
     if path and os.path.exists(path):
         return path
     return ""
+
+
+def main() -> int:
+    """Точка входа CLI миграции фото (BACKLOG C-3).
+
+    Использование::
+
+        python -m app.photo_storage             # только миграция base64→файлы
+        python -m app.photo_storage --vacuum    # + освобождение места в БД
+
+    VACUUM выполняется только если после миграции в базе не осталось
+    base64-значений (см. vacuum_database) — преждевременное сжатие опасно.
+    """
+    import sys
+
+    from database import init_db
+
+    init_db()
+    n = migrate_legacy_base64()
+    print(f"photo_storage: мигрировано записей base64→файл: {n}")
+    if "--vacuum" in sys.argv[1:]:
+        if vacuum_database():
+            print("photo_storage: VACUUM выполнен, файл БД сжат")
+        else:
+            print("photo_storage: VACUUM пропущен — остались base64-значения "
+                  "(повторите миграцию или проверьте битые данные)")
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
