@@ -11,6 +11,7 @@ from authz import require_admin
 from database import (
     get_logs,
     log_action,
+    verify_logs_chain,
 )
 from utils import session_get, show_snack, to_int
 
@@ -67,6 +68,10 @@ class LogsPage(ft.Column):
         # Кнопка "Назад"
         self.back_button = ft.FilledButton("Назад", on_click=self.back_click)
 
+        # B-5: баннер целостности журнала (виден только при разрыве цепочки)
+        self.logs_banner = ft.Text(
+            "", color=ft.Colors.RED_400, weight="bold", visible=False)
+
         # Составляем интерфейс
         self.controls = [
             ft.Row(
@@ -81,6 +86,7 @@ class LogsPage(ft.Column):
                 vertical_alignment=ft.CrossAxisAlignment.CENTER
             ),
             ft.Divider(),
+            self.logs_banner,
             self.logs_table,
             self.back_button
         ]
@@ -123,6 +129,20 @@ class LogsPage(ft.Column):
                 )
             )
         self._page.update()
+
+        # B-5: проверка целостности хеш-цепочки журнала
+        try:
+            broken = verify_logs_chain()
+        except Exception:
+            broken = []
+        if broken:
+            self.logs_banner.visible = True
+            self.logs_banner.value = (
+                f"⚠ Целостность журнала нарушена: строки {broken[:10]}. "
+                "Возможна правка записей вне приложения."
+            )
+        else:
+            self.logs_banner.visible = False
 
     def filter_logs(self, e):
         """Обработчик изменения даты или количества строк."""

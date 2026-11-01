@@ -370,3 +370,58 @@ def test_delete_student_allowed_for_admin(db):
     sid = _first_student_id(db)
     assert repo.delete_student(sid, actor_role=ADMIN_ROLE) is True
     assert repo.get_student_full(sid) is None
+
+
+# ---------- B-5: неизменяемый аудит-лог (хеш-цепочка) ----------
+
+def test_log_action_builds_hash_chain(db):
+    """Каждая новая запись ссылается на hash предыдущей; цепочка цела."""
+    db.log_action("admin", "Действие 1")
+    db.log_action("admin", "Действие 2")
+    db.log_action("user1", "Действие 3")
+    rows = db.execute_query(
+        "SELECT prev_hash, row_hash FROM logs ORDER BY id", fetch=True)
+    assert len(rows) >= 3
+    assert rows[-3]["prev_hash"] == ""          # первая в этом наборе — без предка
+    assert rows[-2]["prev_hash"] == rows[-3]["row_hash"]
+    assert rows[-1]["prev_hash"] == rows[-2]["row_hash"]
+    assert all(r["row_hash"] for r in rows[-3:])
+    assert db.verify_logs_chain() == []
+
+
+def test_verify_logs_chain_detects_tampering(db):
+    """Правка строки журнала вне приложения разрывает цепочку."""
+    db.log_action("admin", "Честное действие")
+    db.log_action("admin", "Второе действие")
+    before = db.verify_logs_chain()
+    assert before == []
+    # злоумышленник меняет текст первой записи напрямую в БД
+    first_id = db.execute_query("SELECT MIN(id) AS i FROM logs",
+                                fetch=True)[0]["i"]
+    db.execute_query("UPDATE logs SET action = 'Подделка' WHERE id = ?",
+                     params=(first_id,))
+    problems = db.verify_logs_chain()
+    assert first_id in problems
+
+
+def test_verify_logs_chain_detects_deletion(db):
+    """Удаление строки из середины также обнаруживается (разрыв prev_hash)."""
+    db.log_action("admin", "A")
+    db.log_action("admin", "B")
+    db.log_action("admin", "C")
+    mid_id = db.execute_query(
+        "SELECT id FROM logs ORDER BY id DESC LIMIT 1 OFFSET 1",
+        fetch=True)[0]["id"]
+    db.execute_query("DELETE FROM logs WHERE id = ?", params=(mid_id,))
+    assert db.verify_logs_chain() != []
+
+
+def test_legacy_rows_without_hashes_are_ok(db):
+    """Старые строки без хешей (до включения B-5) не считаются порчей."""
+    db.execute_query(
+        "INSERT INTO logs (timestamp, username, action) VALUES"
+        " ('2026-01-01 00:00:00', 'admin', 'старая запись')")
+    assert db.verify_logs_chain() == []
+    # новые записи поверх легаси строят корректную цепочку
+    db.log_action("admin", "новая запись")
+    assert db.verify_logs_chain() == []

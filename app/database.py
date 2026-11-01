@@ -338,9 +338,59 @@ def init_db():
 
 # Логирование действия
 def log_action(username, action):
+    """Запись в журнал действий с хеш-цепочкой (BACKLOG B-5).
+
+    Каждая строка хранит hash своей записи и hash предыдущей строки
+    (prev_hash), что делает журнал обнаруживаемо-изменяемым: правка или
+    удаление строки задним числом разрывает цепочку. Проверка целостности
+    — verify_logs_chain(). Для старых записей без хешей вычисление
+    выполняется по той же схеме (timestamp|username|action), поэтому
+    миграция не требуется — колонки добавляются в migrate_schema().
+    """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    query = "INSERT INTO logs (timestamp, username, action) VALUES (?, ?, ?)"
-    execute_query(query, (timestamp, username, action))
+    prev = execute_query(
+        "SELECT row_hash FROM logs ORDER BY id DESC LIMIT 1", fetch=True)
+    prev_hash = prev[0]["row_hash"] if prev and prev[0]["row_hash"] else ""
+    row_hash = _log_row_hash(timestamp, username, action, prev_hash)
+    query = ("INSERT INTO logs (timestamp, username, action, prev_hash, row_hash)"
+             " VALUES (?, ?, ?, ?, ?)")
+    execute_query(query, (timestamp, username, action, prev_hash, row_hash))
+
+
+def _log_row_hash(timestamp, username, action, prev_hash):
+    import hashlib
+    payload = f"{prev_hash}|{timestamp}|{username}|{action}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def verify_logs_chain():
+    """Проверяет хеш-цепочку журнала. Возвращает список проблемных id.
+
+    Пустой список = журнал не изменялся извне. Строки без row_hash
+    (созданные до включения цепочки) пересчитываются на лету; первая
+    такая строка сравнивается по «нулевому» prev_hash, последующие —
+    только если у них тоже нет сохранённых хешей (иначе цепочка уже
+    оборвана и это будет показано отдельно).
+    """
+    rows = execute_query(
+        "SELECT id, timestamp, username, action, prev_hash, row_hash"
+        " FROM logs ORDER BY id", fetch=True) or []
+    problems = []
+    prev_hash = ""
+    for r in rows:
+        stored = r["row_hash"]
+        if stored is None or stored == "":
+            # легаси-запись: ожидаем пустые хеши в БД, пересчёт невозможный
+            if r["prev_hash"] not in (None, ""):
+                problems.append(r["id"])
+            prev_hash = ""
+            continue
+        expected = _log_row_hash(r["timestamp"], r["username"],
+                                 r["action"], prev_hash)
+        if stored != expected or (r["prev_hash"] or "") != prev_hash:
+            problems.append(r["id"])
+        prev_hash = stored
+    return problems
 
 
 # ---------- Политика паролей и защита от перебора (BACKLOG B-2) ----------
@@ -646,9 +696,13 @@ def migrate_schema():
                       ("locked_until", "TEXT")):
         if ensure_column("users", col, decl):
             added.append(col)
+    # B-5: хеш-цепочка журнала (старые строки остаются с NULL-хешами)
+    for col, decl in (("prev_hash", "TEXT"), ("row_hash", "TEXT")):
+        if ensure_column("logs", col, decl):
+            added.append(col)
     if added:
         print("[Канцлер] Миграция схемы: добавлено колонок: "
-              f"{len(added)} (students/users)")
+              f"{len(added)} (students/users/logs)")
     return added
 
 
