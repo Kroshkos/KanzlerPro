@@ -20,6 +20,7 @@ from pages import shell
 from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED
 from utils import session_get, session_clear, to_num, to_int
 from database import log_action
+from authz import is_admin, require_admin, ADMIN_ONLY_PAGES
 
 
 class KantslerApp(ft.Column):
@@ -258,7 +259,7 @@ class KantslerApp(ft.Column):
         panel_w = int(self._num(self.nav_panel.width, self.WIDTH_COMPACT))
         compact = panel_w <= 100
         items = list(self.NAV_ITEMS)
-        if self.role == "admin":
+        if is_admin(self._fpage):
             items += list(self.ADMIN_ITEMS)
 
         logo_children = [ft.Icon(ft.Icons.SHIELD_ROUNDED, color=PRIMARY,
@@ -331,11 +332,20 @@ class KantslerApp(ft.Column):
               view=None):
         """Открывает страницу внутри области содержимого (меню сохраняется)."""
         if view is None:
-            page_cls = get_page(cls_name)
-            try:
-                view = page_cls(self._fpage, *extra, parent=self)
-            except TypeError:
-                view = page_cls(self._fpage, *extra)
+            # Серверная (в терминах приложения) проверка прав: скрыть пункт
+            # меню недостаточно — страницу можно открыть из уведомлений или
+            # вызвав go_to напрямую. Для закрытых классов подставляем
+            # заглушку вместо реальной страницы.
+            denied = (require_admin(self._fpage)
+                      if cls_name in ADMIN_ONLY_PAGES else None)
+            if denied is not None:
+                view = denied
+            else:
+                page_cls = get_page(cls_name)
+                try:
+                    view = page_cls(self._fpage, *extra, parent=self)
+                except TypeError:
+                    view = page_cls(self._fpage, *extra)
 
         # Контейнер с фиксированной шириной и автоскроллом — страницы
         # гарантированно получают ограниченные размеры (нет пустых экранов).

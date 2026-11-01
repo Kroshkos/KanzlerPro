@@ -14,6 +14,7 @@ from pages.registry import get_page
 from theme import (BG, PRIMARY, SUCCESS, WARNING, DANGER, VIOLET, INFO,
                    TEXT_DARK, TEXT_MUTED, card, stat_card, section_title)
 from utils import session_get
+from authz import is_admin
 
 
 def _wrap(page_obj, control):
@@ -98,7 +99,7 @@ class DashboardPage(ft.Column):
                                 on_click=lambda e: self.open("RoadmapIprPage")),
             ],
         )
-        if role == "Администратор":
+        if is_admin(page_obj):  # раньше сравнивалось с литералом "Администратор"
             quick.controls.extend([
                 ft.FilledButton("Пользователи", icon=ft.Icons.PERSON_ADD_ALT,
                                 on_click=lambda e: self.open("UsersPage")),

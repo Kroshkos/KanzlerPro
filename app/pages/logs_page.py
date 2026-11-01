@@ -12,6 +12,7 @@ from database import add_student, get_students, check_user, search_students_by_m
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
+from authz import require_admin
 from pages.registry import get_page
 from pages import shell
 from utils import session_get, session_set, session_clear, show_snack, to_int, to_num
@@ -21,6 +22,12 @@ class LogsPage(ft.Column):
     def __init__(self, page, parent=None):
         super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
+        # Журнал действий — админский раздел (см. authz.ADMIN_ONLY_PAGES);
+        # проверка в конструкторе защищает и прямой вызов страницы вне каркаса.
+        denied = require_admin(page, "Журнал действий доступен только администратору")
+        if denied is not None:
+            self.controls = [denied]
+            return
         self.username = session_get(self._page, "username")
 
         # Поле для выбора даты
