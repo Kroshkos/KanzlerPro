@@ -198,7 +198,8 @@ class DashboardPage(ft.Column):
 
         charts = ft.Row([top_card, blocks_card], spacing=16,
                         vertical_alignment=ft.CrossAxisAlignment.START)
-        bottom = ft.Row([logs_card], spacing=16)
+        analytics_row = ft.Row([groups_card, logs_card], spacing=16,
+                               vertical_alignment=ft.CrossAxisAlignment.START)
 
         menu_row = ft.Row([
             ft.Text("Модуль «Личные дела и учёт»", size=16, weight="bold",
@@ -210,7 +211,7 @@ class DashboardPage(ft.Column):
             ft.Column([menu_row, quick], spacing=12),
             kpis,
             charts,
-            bottom,
+            analytics_row,
         ], spacing=20, expand=True, scroll=ft.ScrollMode.AUTO)
 
         self.controls = [_wrap(page_obj, self.body)] if parent is None else [self.body]

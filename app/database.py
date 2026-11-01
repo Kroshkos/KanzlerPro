@@ -1977,4 +1977,17 @@ def get_roadmap_stats() -> dict[str, Any]:
            LEFT JOIN achievements_catalog a ON a.id = r.achievement_id
            WHERE r.status = 'approved' GROUP BY a.block ORDER BY a.block""",
         fetch=True)
+    # Рейтинг по группам (F-4): сумма одобренных баллов на группу
+    try:
+        stats["by_group"] = execute_query(
+            """SELECT s.o_group_name, s.o_course,
+                      COALESCE(SUM(r.final_points), 0) pts
+               FROM students s
+               JOIN roadmap_reviews r ON r.student_id = s.id
+               WHERE r.status = 'approved'
+               GROUP BY s.id, s.o_group_name, s.o_course
+               ORDER BY pts DESC LIMIT 12""", fetch=True)
+    except Exception:
+        log_except("database: get_roadmap_stats by_group")
+        stats["by_group"] = []
     return stats

@@ -27,6 +27,13 @@
 - Покрытие: E2E-сценарии RBAC (T-1), тесты миграции legacy-хешей паролей
   (B-3), тесты пагинации/кэша/транзакций/doctor, метрики coverage в CI
   (`pytest --cov=app --cov-report=term-missing`, T-4).
+- Уведомления о сроках (F-3): колокольчик на главной показывает суммарный
+  бейдж (заявки на экспертизу + неподтверждённые баллы и курсанты без
+  семестрового статуса для админа), панель уведомлений с переходом на ИПР;
+  функции `count_unresolved_reviews`, `students_missing_semester_status` в
+  `database.py`.
+- Дашборд-аналитика (F-4): карточка «Рейтинг по группам» (ProgressBar),
+  агрегация `by_group` в `get_roadmap_stats()`.
 
 ### Changed
 - SQL из UI-страниц вынесен в `repositories.py` / `database.py` (A-1).

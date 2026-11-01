@@ -135,6 +135,21 @@ def test_log_action_and_get_logs(db):
                for l in logs)
 
 
+def test_roadmap_stats_includes_by_group(db):
+    """F-4: get_roadmap_stats возвращает агрегацию баллов по группам."""
+    sid = _add_student(db)  # группа 'А-12', курс 3
+    _seed_achievement(db)
+    db.add_review(sid, "ach_test_1", semester=1, actor_role=db.ADMIN_ROLE)
+    rid = db.execute_query("SELECT id FROM roadmap_reviews LIMIT 1", fetch=True)[0]["id"]
+    db.update_review(rid, "approved", final_points=12, actor_role=db.ADMIN_ROLE)
+    stats = db.get_roadmap_stats()
+    assert "by_group" in stats
+    rows = list(stats["by_group"])
+    grp = next(r for r in rows if r["o_group_name"] == "А-12")
+    assert (grp["pts"] or 0) >= 12
+    assert grp["o_course"] == 3
+
+
 # ---------- F-3: уведомления о сроках (семестровые статусы, баллы) ----------
 
 def test_students_missing_semester_status(db):
