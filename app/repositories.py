@@ -429,3 +429,44 @@ def delete_student(student_id: int, actor_role=None) -> bool:
     finally:
         cursor.close()
         conn.close()
+
+
+# --- A-1: SQL из страниц в репозитории ------------------------------------
+
+# Поля расширенного поиска курсантов: LIKE-подстрока vs точное совпадение.
+_STU_SEARCH_LIKE_FIELDS = {
+    "surname": "o_surname", "name": "o_name", "lastname": "o_lastname",
+    "group_name": "o_group_name", "gender": "o_gender",
+    "birthplace": "o_birthplace", "citizenship": "o_citizenship",
+    "nationality": "o_nationality", "religion": "o_religion",
+    "marital_status": "o_marital_status", "residence": "o_residence",
+    "bad_habits": "o_bad_habits", "health_status": "o_health_status",
+    "interests": "o_interests", "skills": "o_skills",
+}
+_STU_SEARCH_EXACT_FIELDS = {"course": "o_course", "age": "o_age",
+                            "birthday": "o_birthday"}
+
+
+def search_students_like(**kwargs):
+    """Расширенный поиск курсантов с частичным совпадением (LIKE).
+
+    Копия логики database.search_students_by_multiple_params, но текстовые
+    условия сравниваются как %значение% — пользователь не обязан вводить
+    фамилию целиком без ошибок. Числовые поля (курс/возраст) — точно.
+    Перенесено из pages/search_page.py (A-1: SQL живёт в репозиториях).
+    """
+    query = "SELECT * FROM students WHERE 1=1"
+    params = []
+    for kw, col in {**_STU_SEARCH_LIKE_FIELDS,
+                    **_STU_SEARCH_EXACT_FIELDS}.items():
+        val = kwargs.get(kw)
+        if val in (None, ""):
+            continue
+        if kw in _STU_SEARCH_LIKE_FIELDS:
+            query += f" AND {col} LIKE ?"
+            params.append(f"%{val}%")
+        else:
+            query += f" AND {col} = ?"
+            params.append(val)
+    from database import execute_query
+    return execute_query(query, params=tuple(params), fetch=True)
