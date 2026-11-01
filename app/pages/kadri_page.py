@@ -11,6 +11,7 @@ import photo_storage
 
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
+from access import PermissionDeniedError
 from constants import EDITABLE_STUDENT_FIELDS
 from database import (
     get_students,
@@ -1105,12 +1106,21 @@ class AddStudentPage(ft.Column):
 
         # --- 3. Запись в БД + фотохранилище ----------------------------------
         try:
-            student_id = repo.add_student(data)
+            # B-1: серверная проверка прав — роль из сессии
+            student_id = repo.add_student(
+                data, actor_role=session_get(self._page, "role"))
             if self.photo_bytes:
                 # Фото — файл в DATA_DIR/photos; в БД только имя файла.
                 filename = photo_storage.save_photo(
                     self.photo_bytes, student_id, self.photo_ext)
-                repo.update_student_fields(student_id, {"o_photo": filename})
+                repo.update_student_fields(student_id, {"o_photo": filename},
+                                           actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            # B-1: отказ серверного слоя прав — понятный ответ вместо «Ошибка»
+            show_snack(self._page, ft.Text(
+                "Недостаточно прав: добавление курсанта доступно только администратору"))
+            self._page.update()
+            return
         except Exception as ex:
             show_snack(self._page, ft.Text(f"Ошибка: {ex}"))
             self._page.update()
@@ -1337,13 +1347,20 @@ class EditStudentPage(ft.Column):
             existing = set(repo.get_student_columns())
             updates = {k: v for k, v in updates.items() if k in existing}
 
-            ok = update_student_fields(self.student_id, updates)
+            # B-1: серверная проверка прав — роль из сессии
+            ok = update_student_fields(self.student_id, updates,
+                                       actor_role=session_get(self._page, "role"))
             msg = "Изменения сохранены" if ok else "Нет изменённых полей"
             show_snack(self._page, ft.Text(msg))
             self._page.update()
             if ok:
                 log_action(session_get(self._page, "username"),
                            f"Отредактирован студент ID {self.student_id}")
+        except PermissionDeniedError:
+            # B-1: отказ серверного слоя прав — понятный ответ вместо «Ошибка»
+            show_snack(self._page, ft.Text(
+                "Недостаточно прав: изменение личного дела доступно только администратору"))
+            self._page.update()
         except Exception as ex:
             show_snack(self._page, ft.Text(f"Ошибка: {ex}"))
             self._page.update()

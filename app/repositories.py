@@ -350,11 +350,12 @@ def get_student_full(student_id: int) -> Row | None:
     return rows[0] if rows else None
 
 
-def update_student_fields(student_id: int, fields: dict) -> bool:
+def update_student_fields(student_id: int, fields: dict,
+                          actor_role=None) -> bool:
     """Частичное обновление личного дела через белый список STUDENT_FIELDS."""
     from database import update_student
 
-    return update_student(student_id, fields)
+    return update_student(student_id, fields, actor_role=actor_role)
 
 
 def get_student_columns() -> list:
@@ -367,7 +368,7 @@ def get_student_columns() -> list:
     return [r[1] for r in rows]
 
 
-def add_student(student_data: dict) -> int:
+def add_student(student_data: dict, actor_role=None) -> int:
     """Создать курсанта по плоскому dict колонок students.
 
     Тонкая обёртка над database.add_student(): INSERT со строго параметризованным
@@ -377,7 +378,7 @@ def add_student(student_data: dict) -> int:
     """
     from database import add_student as _db_add_student
 
-    return _db_add_student(student_data)
+    return _db_add_student(student_data, actor_role=actor_role)
 
 
 def delete_student(student_id: int) -> bool:

@@ -698,7 +698,7 @@ def backup_database(db_path=None, backups_dir=None, keep=BACKUP_KEEP):
     return dest
 
 
-def update_student(student_id, student_data):
+def update_student(student_id, student_data, actor_role=None):
     """Обновляет личное дело курсанта.
 
     Обновляются только те поля из STUDENT_FIELDS, которые присутствуют в
@@ -706,6 +706,8 @@ def update_student(student_id, student_data):
     списка STUDENT_FIELDS — произвольные строки в SQL не попадают.
     Возвращает True, если запись найдена и обновлена.
     """
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="update_student")
     fields = [f for f in STUDENT_FIELDS if f in student_data]
     if not fields:
         return False
@@ -724,7 +726,9 @@ def update_student(student_id, student_data):
         conn.close()
 
 
-def add_student(student_data):
+def add_student(student_data, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_student")
     conn = connect_to_db()  # Открываем соединение с базой данных
     cursor = conn.cursor()  # Создаем курсор
 
@@ -1406,7 +1410,10 @@ def get_recent_pending_reviews(limit=10):
 
 def add_review(student_id, achievement_id, semester, status="pending",
                confirmation_file="", comment=None, k_ur=1.0, k_role=1.0,
-               k_vn=1.0, k_st=1.0, duration_months=0, grant_amount=0, ip_bonus=0):
+               k_vn=1.0, k_st=1.0, duration_months=0, grant_amount=0, ip_bonus=0,
+               actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_review")
     ach = execute_query(
         "SELECT points, calc_type FROM achievements_catalog WHERE id = ?",
         (str(achievement_id),), fetch=True)
@@ -1505,7 +1512,10 @@ def get_individual_plan(student_id, semester):
     return rows[0] if rows else None
 
 
-def set_semester_status(student_id, semester, is_candidate=None, is_resident=None):
+def set_semester_status(student_id, semester, is_candidate=None, is_resident=None,
+                        actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="set_semester_status")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cur = get_semester_status(student_id, semester)
     cand = int(bool(is_candidate)) if is_candidate is not None else (cur["is_candidate"] if cur else 0)
@@ -1563,7 +1573,9 @@ def delete_manual_score(score_id, actor_role=None):
     execute_query("DELETE FROM manual_scores WHERE id = ?", (score_id,))
 
 
-def set_semester_average(student_id, semester, average_score):
+def set_semester_average(student_id, semester, average_score, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="set_semester_average")
     execute_query(
         """INSERT INTO semester_averages (student_id, semester, average_score)
            VALUES (?,?,?)

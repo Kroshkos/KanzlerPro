@@ -193,7 +193,13 @@ class RoadmapExpertPage(ft.Column):
             semester = to_int(self.semester_field.value, 1)
         except ValueError:
             semester = 1
-        add_review(int(sid), aid, semester, status="pending")
+        try:
+            # B-1: серверная проверка прав — роль из сессии
+            add_review(int(sid), aid, semester, status="pending",
+                       actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            self._deny_snack()
+            return
         log_action(session_get(self._page, "username"),
                    f"Road Map: зарегистрировано достижение {aid} для студента {sid}")
         self.refresh_table()

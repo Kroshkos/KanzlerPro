@@ -181,21 +181,37 @@ class RoadmapIprPage(ft.Column):
         self._page.update()
 
     # ------------------------------------------------------------------
+    def _deny_snack(self):
+        """B-1: единый ответ на отказ серверного слоя прав."""
+        show_snack(self._page,
+                   "Недостаточно прав: действие доступно только администратору")
+        self._page.update()
+
     def save_statuses(self, e):
         sid = self._student_id()
         if not sid:
             show_snack(self._page, "Сначала выберите курсанта")
             return
         sem = self._semester()
-        set_semester_status(sid, sem,
-                            is_candidate=self.candidate_switch.value,
-                            is_resident=self.resident_switch.value)
+        role = session_get(self._page, "role")
+        try:
+            # B-1: серверная проверка прав — роль из сессии
+            set_semester_status(sid, sem,
+                                is_candidate=self.candidate_switch.value,
+                                is_resident=self.resident_switch.value,
+                                actor_role=role)
+        except PermissionDeniedError:
+            self._deny_snack()
+            return
         avg_raw = (self.avg_field.value or "").replace(",", ".").strip()
         if avg_raw:
             try:
-                set_semester_average(sid, sem, to_num(avg_raw))
+                set_semester_average(sid, sem, to_num(avg_raw), actor_role=role)
             except ValueError:
                 show_snack(self._page, "Средний балл должен быть числом")
+                return
+            except PermissionDeniedError:
+                self._deny_snack()
                 return
         log_action(self.username,
                    f"ИПР: обновлены статусы студента {sid} (семестр {sem})")
@@ -208,8 +224,14 @@ class RoadmapIprPage(ft.Column):
             return
         sem = self._semester()
         approved_by = self.username if status == "approved" else None
-        save_individual_plan(sid, sem, self.plan_field.value or "",
-                             status=status, approved_by=approved_by)
+        try:
+            # B-1: серверная проверка прав — роль из сессии
+            save_individual_plan(sid, sem, self.plan_field.value or "",
+                                 status=status, approved_by=approved_by,
+                                 actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            self._deny_snack()
+            return
         log_action(self.username,
                    f"ИПР: {'утверждён' if status == 'approved' else 'сохранён'} "
                    f"для студента {sid} (семестр {sem})")

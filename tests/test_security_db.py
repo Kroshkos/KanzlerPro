@@ -264,3 +264,56 @@ def test_manual_score_mutations_allowed_for_admin(db):
     db.delete_manual_score(rows[0]["id"], actor_role=ADMIN_ROLE)
     assert not [r for r in db.get_manual_scores(student_id=sid)
                 if r["id"] == rows[0]["id"]]
+
+
+# --- B-1: ИПР (статусы семестра, средний балл, план) и регистрация заявок --
+
+@pytest.mark.parametrize("actor_role", ["Пользователь", "Гость"])
+def test_ipr_mutations_denied_for_non_admin(db, actor_role):
+    """B-1: статусы/средний балл/план ИПР проверяют права на сервере."""
+    from access import PermissionDeniedError
+    sid = _first_student_id(db)
+    with pytest.raises(PermissionDeniedError):
+        db.set_semester_status(sid, 1, is_candidate=True, actor_role=actor_role)
+    with pytest.raises(PermissionDeniedError):
+        db.set_semester_average(sid, 1, 4.5, actor_role=actor_role)
+    with pytest.raises(PermissionDeniedError):
+        db.save_individual_plan(sid, 1, "текст плана", actor_role=actor_role)
+    # данные не изменились
+    assert db.get_semester_status(sid, 1) is None
+    assert db.get_semester_average(sid, 1) is None
+    assert db.get_individual_plan(sid, 1) is None
+
+
+def test_ipr_mutations_allowed_for_admin(db):
+    from constants import ADMIN_ROLE
+    sid = _first_student_id(db)
+    db.set_semester_status(sid, 1, is_candidate=True, actor_role=ADMIN_ROLE)
+    st = db.get_semester_status(sid, 1)
+    assert st is not None and st["is_candidate"] == 1
+    db.set_semester_average(sid, 1, 4.5, actor_role=ADMIN_ROLE)
+    assert db.get_semester_average(sid, 1) == 4.5
+    db.save_individual_plan(sid, 1, "план", status="approved",
+                             approved_by="boss", actor_role=ADMIN_ROLE)
+    plan = db.get_individual_plan(sid, 1)
+    assert plan is not None and plan["status"] == "approved"
+
+
+@pytest.mark.parametrize("actor_role", ["Пользователь", "Гость"])
+def test_add_review_denied_for_non_admin(db, actor_role):
+    """B-1: регистрация достижения (add_review) проверяет права на сервере."""
+    from access import PermissionDeniedError
+    sid = _first_student_id(db)
+    db.add_achievement("A1", 1, "Тест", 10, actor_role=None)
+    with pytest.raises(PermissionDeniedError):
+        db.add_review(sid, "A1", 1, actor_role=actor_role)
+    assert db.get_reviews(student_id=sid) == []
+
+
+def test_add_review_allowed_for_admin(db):
+    from constants import ADMIN_ROLE
+    sid = _first_student_id(db)
+    db.add_achievement("A1", 1, "Тест", 10, actor_role=ADMIN_ROLE)
+    db.add_review(sid, "A1", 1, actor_role=ADMIN_ROLE)
+    rows = db.get_reviews(student_id=sid)
+    assert len(rows) == 1 and rows[0]["status"] == "pending"
