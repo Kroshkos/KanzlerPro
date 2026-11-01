@@ -1,7 +1,7 @@
 import flet as ft
 import ui_kit as k
-from database import connect_to_db
 
+import repositories as repo
 from pages import shell
 
 # Поля, доступные для расширенного поиска (единый список вместо 17 if/elif)
@@ -23,43 +23,6 @@ _PARAM_MAP = {
     "Состояние здоровья": "health_status", "Интересы": "interests",
     "Навыки": "skills",
 }
-
-
-def _search_like(**kwargs):
-    """Расширенный поиск с частичным совпадением (LIKE) вместо точного.
-
-    Копия логики database.search_students_by_multiple_params, но текстовые
-    условия сравниваются как %значение% — пользователь не обязан вводить
-    фамилию целиком без ошибок. Числовые поля (курс/возраст) — точно.
-    """
-    like_fields = {
-        "surname": "o_surname", "name": "o_name", "lastname": "o_lastname",
-        "group_name": "o_group_name", "gender": "o_gender",
-        "birthplace": "o_birthplace", "citizenship": "o_citizenship",
-        "nationality": "o_nationality", "religion": "o_religion",
-        "marital_status": "o_marital_status", "residence": "o_residence",
-        "bad_habits": "o_bad_habits", "health_status": "o_health_status",
-        "interests": "o_interests", "skills": "o_skills",
-    }
-    exact_fields = {"course": "o_course", "age": "o_age", "birthday": "o_birthday"}
-    query = "SELECT * FROM students WHERE 1=1"
-    params = []
-    for kw, col in {**like_fields, **exact_fields}.items():
-        val = kwargs.get(kw)
-        if val in (None, ""):
-            continue
-        if kw in like_fields:
-            query += f" AND {col} LIKE ?"
-            params.append(f"%{val}%")
-        else:
-            query += f" AND {col} = ?"
-            params.append(val)
-    conn = connect_to_db()
-    try:
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
-    return rows
 
 
 class SearchPage(ft.Column):
@@ -188,7 +151,7 @@ class SearchPage(ft.Column):
             self._page.update()
             return
 
-        students = _search_like(**kwargs)
+        students = repo.search_students_like(**kwargs)
         self.results_container.controls.clear()
 
         if not students:

@@ -463,10 +463,12 @@ def search_students_like(**kwargs):
         if val in (None, ""):
             continue
         if kw in _STU_SEARCH_LIKE_FIELDS:
-            query += f" AND {col} LIKE ?"
-            params.append(f"%{val}%")
+            # Регистронезависимый поиск для кириллицы: LOWER() SQLite
+            # работает только по ASCII, поэтому используем пользовательскую
+            # функцию LOWER_UNICODE (регистрация — в database.connect_to_db).
+            query += f" AND LOWER_UNICODE({col}) LIKE ?"
+            params.append(f"%{str(val).lower()}%")
         else:
             query += f" AND {col} = ?"
             params.append(val)
-    from database import execute_query
     return execute_query(query, params=tuple(params), fetch=True)

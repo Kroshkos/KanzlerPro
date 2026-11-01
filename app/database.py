@@ -45,9 +45,17 @@ def ensure_column(table, column, decl="TEXT"):
 
 
 # Подключение к базе данных SQLite
+def _lower_unicode(s):
+    """Регистронезависимость для кириллицы: встроенный LOWER() SQLite
+    работает только по ASCII ('Иванов' -> 'Иванов'), из-за чего поиск по
+    фамилии в нижнем регистре не находил записи с заглавной буквы."""
+    return (s or "").lower()
+
+
 def connect_to_db():
     conn = sqlite3.connect(DB_PATH)  # Файл базы данных
     conn.execute("PRAGMA foreign_keys = ON")  # включаем контроль внешних ключей
+    conn.create_function("LOWER_UNICODE", 1, _lower_unicode, deterministic=True)
     return conn
 
 # Функция для выполнения SQL-запросов
@@ -1097,6 +1105,12 @@ def count_students():
     return int(row[0]["c"]) if row else 0
 
 
+def count_students() -> int:
+    """Всего курсантов в базе (для расчёта числа страниц пагинации, C-1)."""
+    rows = execute_query("SELECT COUNT(*) c FROM students", fetch=True)
+    return int(rows[0]["c"]) if rows else 0
+
+
 def get_students(limit=None, offset=0):
     """Список курсантов. limit=None — все записи (обратная совместимость),
     иначе — страница размером limit со смещением offset (пагинация, C-1)."""
@@ -1199,12 +1213,20 @@ def get_penalties_by_student(student_id):
     return execute_query(query, (student_id,), fetch=True)
 
 def search_students_by_name_part(name_part):
+    """Поиск курсантов по части ФИО.
+
+    Регистронезависимый (LOWER_UNICODE — см. connect_to_db): раньше поиск
+    «иван» не находил «Иванов», потому что LOWER() SQLite работает только
+    по ASCII. Условие нормализуется на стороне Python, колонка — в SQL.
+    """
     query = """
     SELECT id, o_surname, o_name, o_lastname FROM students
-    WHERE o_surname LIKE ? OR o_name LIKE ? OR o_lastname LIKE ?
+    WHERE LOWER_UNICODE(o_surname) LIKE ?
+       OR LOWER_UNICODE(o_name) LIKE ?
+       OR LOWER_UNICODE(o_lastname) LIKE ?
     """
-    name_part = f"%{name_part}%"  # Добавляем % для поиска по части строки
-    return execute_query(query, (name_part, name_part, name_part), fetch=True)
+    part = f"%{(name_part or '').strip().lower()}%"
+    return execute_query(query, (part, part, part), fetch=True)
 
 def get_subjects_by_name_part(name_part):
     query = "SELECT id, subject_name FROM subjects WHERE subject_name LIKE ?"
