@@ -137,8 +137,26 @@ class KantslerApp(ft.Column):
     # ------------------------------------------------------------------
     # Размеры / адаптивность
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Безопасные преобразования размеров.
+    # В Flet 1.x значения ширины/высоты могут приходить из протокола как
+    # строки — прямое сравнение str с числом падает с ошибкой
+    # "'<=' not supported between instances of 'str' and 'float'".
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _num(value, default=None):
+        try:
+            if value is None or value == "":
+                return default
+            return float(str(value).replace(",", "."))
+        except (TypeError, ValueError):
+            return default
+
+    def _page_width(self):
+        return int(self._num(getattr(self._fpage, "width", None), 1200) or 1200)
+
     def _sidebar_mode(self):
-        w = self._fpage.width or 1200
+        w = self._page_width()
         if w >= 1400:
             return "full"
         if w >= 900:
@@ -154,10 +172,20 @@ class KantslerApp(ft.Column):
         return 0
 
     def _content_width(self):
-        w = self._fpage.width or 1200
+        w = self._page_width()
         return max(w - self._panel_width() - 2, 320)
 
     def _on_resize(self, e):
+        # Источник истины — событие ресайза (ширина может прийти строкой)
+        try:
+            ew = getattr(e, "width", None)
+            if ew is not None:
+                self._fpage.width = self._num(ew, None)
+            eh = getattr(e, "height", None)
+            if eh is not None:
+                self._fpage.height = self._num(eh, None)
+        except Exception:
+            pass
         mode = self._sidebar_mode()
         pw = self._panel_width()
         if pw != self.nav_panel.width:
@@ -180,8 +208,8 @@ class KantslerApp(ft.Column):
         else:
             self._forced = "compact"
             self.nav_panel.width = self.WIDTH_COMPACT
-        self._content_col.width = max((self._fpage.width or 1200)
-                                      - self.nav_panel.width - 2, 320)
+        panel_w = int(self._num(self.nav_panel.width, self.WIDTH_COMPACT))
+        self._content_col.width = max(self._page_width() - panel_w - 2, 320)
         self._build_nav()
         self._fpage.update()
 
@@ -189,7 +217,8 @@ class KantslerApp(ft.Column):
     # Построение панели навигации
     # ------------------------------------------------------------------
     def _build_nav(self):
-        compact = (self.nav_panel.width or self.WIDTH_COMPACT) <= 100
+        panel_w = int(self._num(self.nav_panel.width, self.WIDTH_COMPACT))
+        compact = panel_w <= 100
         items = list(self.NAV_ITEMS)
         if self.role == "admin":
             items += list(self.ADMIN_ITEMS)
@@ -264,9 +293,10 @@ class KantslerApp(ft.Column):
 
         # Контейнер с фиксированной шириной и автоскроллом — страницы
         # гарантированно получают ограниченные размеры (нет пустых экранов).
+        col_w = int(self._num(self._content_col.width, 1200))
         holder = ft.Container(
             content=view,
-            width=self._content_col.width - self.CONTENT_PADDING * 2,
+            width=max(col_w - self.CONTENT_PADDING * 2, 320),
             bgcolor=BG,
         )
         self._content_col.controls = [holder]
