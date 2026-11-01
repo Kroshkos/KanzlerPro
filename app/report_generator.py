@@ -48,6 +48,7 @@ def _register_cyrillic_font():
                 pdfmetrics.registerFont(TTFont("CyrillicFont", path))
                 return "CyrillicFont"
             except Exception:
+                log_except("report_generator: регистрация кириллического шрифта")
                 continue
     return "Helvetica"
 
@@ -174,7 +175,6 @@ def generate_R1(student_id, semester, fmt="xlsx"):
 
 def _fill_R1(ws, s, semester, all_rev):
     sem_rev = [r for r in all_rev if r["semester"] == semester]
-    approved = [r for r in sem_rev if r["status"] == "approved"]
     points_sum = _points_sum(sem_rev)
     total_cum = _points_sum(all_rev)
 

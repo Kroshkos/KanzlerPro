@@ -441,6 +441,7 @@ class KantslerApp(ft.Column):
             from database import get_recent_pending_reviews
             rows = get_recent_pending_reviews(limit=15) or []
         except Exception:
+            log_except("home_page: загрузка уведомлений")
             rows = []
         items = []
         if not rows:
@@ -448,16 +449,21 @@ class KantslerApp(ft.Column):
                 padding=14,
                 content=ft.Text("Новых заявок на экспертизу нет ✨",
                                 size=13, color=TEXT_MUTED)))
+
+        # Вспомогательная функция вне цикла: раньше _g определялась внутри
+        # цикла и ссылалась на переменную r из замыкания (B023) — при
+        # отложенном вызове все строки читались бы по последней итерации.
+        def _g(row, k):
+            try:
+                v = row[k]
+            except Exception:
+                v = None
+            return str(v).strip() if v not in (None, "") else "—"
+
         for r in rows:
-            def _g(k):
-                try:
-                    v = r[k]
-                except Exception:
-                    v = None
-                return str(v).strip() if v not in (None, "") else "—"
-            fio = " ".join(x for x in [_g("o_surname"), _g("o_name"),
-                                       _g("o_lastname")] if x != "—") or "—"
-            sem = to_int(_g("semester"))
+            fio = " ".join(x for x in [_g(r, "o_surname"), _g(r, "o_name"),
+                                       _g(r, "o_lastname")] if x != "—") or "—"
+            sem = to_int(_g(r, "semester"))
             items.append(
                 ft.Container(
                     ink=True,
@@ -469,14 +475,14 @@ class KantslerApp(ft.Column):
                         ft.Column([
                             ft.Text(fio, size=13, weight="bold",
                                     color=TEXT_DARK, no_wrap=True),
-                            ft.Text(f"{_g('name')}"
+                            ft.Text(f"{_g(r, 'name')}"
                                     + (f" · семестр {sem}" if sem else ""),
                                     size=11.5, color=TEXT_MUTED,
                                     no_wrap=True,
                                     overflow=ft.TextOverflow.ELLIPSIS),
                         ], spacing=2, expand=True),
                     ]),
-                    on_click=lambda ev, sid=to_int(_g("student_id")):
+                    on_click=lambda ev, sid=to_int(_g(r, "student_id")):
                         self.open_expert_for_student(sid),
                 ))
         panel = ft.Container(

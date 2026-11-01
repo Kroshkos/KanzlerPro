@@ -3,6 +3,8 @@ import re
 import sqlite3
 from datetime import datetime
 
+from utils_logger import log_except
+
 # Абсолютный путь к файлу базы данных (не зависит от текущей директории,
 # из которой запущено приложение — раньше БД «терялась» при запуске из другой папки)
 from config import DB_PATH  # единая база приложения kanzler_pro.db
@@ -834,9 +836,9 @@ def add_student(student_data):
             cursor.execute(rank_query, rank_params)
             
         conn.commit()
-    except Exception as e:
+    except Exception:
         conn.rollback()
-        raise e
+        raise
 
     finally:
         cursor.close()
@@ -1144,6 +1146,7 @@ def count_pending_reviews():
             fetch=True)
         return int(rows[0][0]) if rows else 0
     except Exception:
+        log_except("database: count_pending_reviews")
         return 0
 
 
@@ -1159,7 +1162,9 @@ def get_recent_pending_reviews(limit=10):
     try:
         ensure_column("roadmap_reviews", "created_at", "DATETIME")
     except Exception:
-        pass  # если ALTER недоступен (например, база только для чтения)
+        # если ALTER недоступен (например, база только для чтения) —
+        # ниже сработает запасной запрос без created_at
+        log_except("database: миграция roadmap_reviews.created_at")
     try:
         return execute_query(
             "SELECT r.id, r.student_id, s.o_surname, s.o_name, s.o_lastname, "
@@ -1172,6 +1177,7 @@ def get_recent_pending_reviews(limit=10):
             (int(limit),), fetch=True) or []
     except Exception:
         # created_at может отсутствовать в старой схеме — упрощённый вариант
+        log_except("database: get_recent_pending_reviews (основной запрос)")
         try:
             return execute_query(
                 "SELECT r.id, r.student_id, s.o_surname, s.o_name, s.o_lastname, "
@@ -1183,6 +1189,7 @@ def get_recent_pending_reviews(limit=10):
                 "ORDER BY r.id DESC LIMIT ?",
                 (int(limit),), fetch=True) or []
         except Exception:
+            log_except("database: get_recent_pending_reviews (запасной запрос)")
             return []
 
 

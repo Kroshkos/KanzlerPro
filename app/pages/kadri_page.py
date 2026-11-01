@@ -18,6 +18,7 @@ from database import (
 )
 from repositories import update_student_fields
 from utils import session_get, show_snack, to_int
+from utils_logger import log_except
 
 from pages import shell
 
@@ -124,7 +125,8 @@ class AddStudentPage(ft.Column):
             if not any(isinstance(c, ft.FilePicker) for c in ov):
                 self._page.overlay.append(self.photo_picker)
         except Exception:
-            pass  # overlay недоступен (не-рантайм страница) — диалог не критичен
+            # overlay недоступен (не-рантайм страница) — диалог не критичен
+            log_except("kadri_page: добавление FilePicker в overlay")
 
         self.photo_bytes: bytes | None = None  # байты выбранного фото (для сохранения на диске)
         self.photo_ext: str = "jpg"

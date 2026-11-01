@@ -264,8 +264,8 @@ class PremiaWorkPage(ft.Column):
                     for cell in column:
                         try:
                             max_length = max(max_length, len(str(cell.value)))
-                        except:
-                            log_except("premia_page: блок на строке 266")
+                        except Exception:
+                            log_except("premia_page: расчёт ширины колонки Excel")
                     adjusted_width = (max_length + 2) * 1.2  # Добавляем небольшой отступ
                     worksheet.column_dimensions[column_letter].width = adjusted_width
 

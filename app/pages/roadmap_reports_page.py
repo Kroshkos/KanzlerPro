@@ -44,12 +44,6 @@ class RoadmapReportsPage(ft.Column):
         self._refresh_files()
 
     # ---------------- форма параметров ----------------
-    def _student_suggest(self):
-        semesters = [r["semester"] for r in execute_query(
-            "SELECT DISTINCT semester FROM roadmap_reviews "
-            "WHERE semester IS NOT NULL ORDER BY semester", fetch=True)]
-        return semesters
-
     def _build_form(self):
         self.form_dd = ft.Dropdown(
             label="Форма", width=380, dense=True, value="R2",
@@ -61,7 +55,6 @@ class RoadmapReportsPage(ft.Column):
         self.group_tf = ft.TextField(
             label="Группа (пусто = все)", width=220, dense=True,
             border_radius=10)
-        sems = self._student_suggest()
         self.sem_dd = ft.Dropdown(
             label="Семестр", width=170, dense=True,
             options=[ft.dropdown.Option(key="", text="Все")] +
@@ -196,4 +189,5 @@ class RoadmapReportsPage(ft.Column):
             else:
                 subprocess.Popen(["xdg-open", path])
         except Exception:
-            pass  # в web-режиме файл доступен в папке data/reports
+            # в web-режиме файл доступен в папке data/reports — не критично
+            log_except("roadmap_reports_page: открытие файла в ОС")
