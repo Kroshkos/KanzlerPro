@@ -20,11 +20,22 @@ import binascii
 import os
 import re
 
-from config import PHOTOS_DIR
-
 # Разрешённые расширения загружаемых фото (совпадает с allowed_extensions
 # FilePicker в форме добавления курсанта).
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png"}
+
+
+def _photos_dir() -> str:
+    """Каталог фото берётся ДИНАМИЧЕСКИ из config (срез C-3).
+
+    Раньше модуль сохранял `from config import PHOTOS_DIR` — импортный
+    снимок пути. Тесты (и любые перезагрузки конфигурации) подменяют
+    атрибуты config, а photo_storage продолжал писать в старый каталог,
+    из-за чего doctor и тесты видели рассинхрон путей.
+    """
+    import config
+
+    return config.PHOTOS_DIR
 
 # Признак «это base64, а не имя файла»: длинная строка без слэшей, состоящая
 # только из символов base64. Имена файлов у нас короткие ("<int>.<ext>").
@@ -44,9 +55,10 @@ def save_photo(raw_bytes: bytes, student_id: int, ext: str = "jpg") -> str:
     """
     if not raw_bytes:
         return ""
-    os.makedirs(PHOTOS_DIR, exist_ok=True)
+    photos_dir = _photos_dir()
+    os.makedirs(photos_dir, exist_ok=True)
     filename = f"{int(student_id)}.{_valid_ext(ext)}"
-    path = os.path.join(PHOTOS_DIR, filename)
+    path = os.path.join(photos_dir, filename)
     with open(path, "wb") as f:
         f.write(raw_bytes)
     return filename
@@ -139,8 +151,9 @@ def photo_path(value: str):
         return None
     if os.sep in value or "/" in value or ".." in value:
         return None
-    path = os.path.realpath(os.path.join(PHOTOS_DIR, value))
-    if not path.startswith(os.path.realpath(PHOTOS_DIR) + os.sep):
+    photos_dir = _photos_dir()
+    path = os.path.realpath(os.path.join(photos_dir, value))
+    if not path.startswith(os.path.realpath(photos_dir) + os.sep):
         return None
     return path
 
