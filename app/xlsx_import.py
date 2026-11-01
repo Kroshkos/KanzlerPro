@@ -93,6 +93,10 @@ def validate_row(line_no: int, raw: dict) -> ImportRow:
             label = next(h for h, f_ in COLUMN_MAP.items() if f_ == fld)
             row.errors.append(f"Не заполнено обязательное поле «{label}»")
 
+    # Отчество необязательно в файле, но колонка students NOT NULL —
+    # подставляем пустую строку (как форма kadri_page), иначе INSERT упадёт.
+    row.data.setdefault("o_lastname", "")
+
     course = row.data.get("o_course")
     if course is not None:
         try:

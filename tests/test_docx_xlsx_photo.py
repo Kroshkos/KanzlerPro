@@ -57,7 +57,7 @@ def test_fio_genitive_full_name():
 def _make_student(db, surname="Иванов", name="Иван", group="А-11", course=1):
     return db.add_student({"o_surname": surname, "o_name": name,
                            "o_lastname": "Петрович", "o_course": course,
-                           "o_group_name": group}, actor_role="admin")
+                           "o_group_name": group}, actor_role="Администратор")
 
 
 def test_generate_personal_file_docx_creates_file(db, tmp_path, monkeypatch):
@@ -180,7 +180,7 @@ def test_commit_import_atomic_all_or_nothing(db, tmp_path):
         ["Абрамов", "Абрам", None, 1, "А-11", "М", None],
         ["Баранов", "Борис", None, 2, "А-11", "М", None],
     ])
-    inserted = commit_import(parse_workbook(path), actor_role="admin",
+    inserted = commit_import(parse_workbook(path), actor_role="Администратор",
                              log_user="tester")
     assert inserted == 2
     assert db.count_students() == 2
@@ -196,7 +196,7 @@ def test_commit_import_skips_invalid_rows_only(db, tmp_path):
         [None, None, None, None, None, None, None],      # пустая — пропуск
         ["", "Нет фамилии", None, None, None, None, None],  # ошибка валидации
     ])
-    inserted = commit_import(parse_workbook(path), actor_role="admin")
+    inserted = commit_import(parse_workbook(path), actor_role="Администратор")
     assert inserted == 1
     names = [dict(r)["o_surname"] for r in db.get_students()]
     assert names == ["Волков"]
@@ -220,7 +220,7 @@ def test_create_template_roundtrip(db, tmp_path):
     path = create_template_xlsx(str(tmp_path / "template.xlsx"))
     rows = parse_workbook(path)
     assert len(rows) == 1 and rows[0].ok
-    assert commit_import(rows, actor_role="admin") == 1
+    assert commit_import(rows, actor_role="Администратор") == 1
 
 
 # ============================== C-3: фотохранилище =========================
@@ -250,7 +250,7 @@ def test_migrate_legacy_base64_moves_to_files(db, tmp_path, monkeypatch):
     monkeypatch.setattr(photo_storage, "PHOTOS_DIR", str(tmp_path / "ph"))
     payload = base64.b64encode(b"x" * 100).decode()  # >64 символов — «похоже на base64»
     sid = db.add_student({"o_surname": "Фоткин", "o_name": "Фот",
-                          "o_photo": payload}, actor_role="admin")
+                          "o_photo": payload}, actor_role="Администратор")
     assert photo_storage.legacy_base64_count() == 1
 
     migrated = photo_storage.migrate_legacy_base64()
@@ -270,7 +270,7 @@ def test_vacuum_refused_until_migration_done(db, tmp_path, monkeypatch):
     monkeypatch.setattr(photo_storage, "PHOTOS_DIR", str(tmp_path / "ph"))
     payload = base64.b64encode(b"y" * 100).decode()
     db.add_student({"o_surname": "Легаси", "o_name": "Лёха",
-                    "o_photo": payload}, actor_role="admin")
+                    "o_photo": payload}, actor_role="Администратор")
     assert photo_storage.vacuum_database() is False   # есть base64 — рано
     photo_storage.migrate_legacy_base64()
     assert photo_storage.vacuum_database() is True    # миграция завершена
@@ -285,7 +285,7 @@ def test_doctor_check_photos_flags_legacy_base64(db, tmp_path, monkeypatch):
     os.makedirs(tmp_path / "ph", exist_ok=True)
     sid = db.add_student({"o_surname": "Доктор", "o_name": "Док",
                           "o_photo": base64.b64encode(b"z" * 100).decode()},
-                         actor_role="admin")
+                         actor_role="Администратор")
     problems = doctor.check_photos()
     assert "photos-legacy-base64" in problems
 

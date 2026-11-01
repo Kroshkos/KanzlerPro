@@ -3,12 +3,21 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import threading
 from collections.abc import Iterator
 from datetime import datetime, timedelta
 from typing import Any
 
 from access import require_role
 from cache import invalidate as _cache_invalidate
+
+# Активная транзакция потока (BACKLOG A-3): transaction() регистрирует в
+# thread-local своё WRITE-соединение, и execute_query направляет запросы
+# туда же — иначе вложенный log_action открыл бы второе соединение внутри
+# активной BEGIN ... IMMEDIATE и получил «database is locked».
+_tls = threading.local()
+_depth = threading.local()
+_depth.value = 0
 
 # Абсолютный путь к файлу базы данных (не зависит от текущей директории,
 # из которой запущено приложение — раньше БД «терялась» при запуске из другой папки)
@@ -85,14 +94,39 @@ def transaction() -> Iterator[sqlite3.Connection]:
             conn.execute("INSERT INTO ...", (...))
             conn.execute("INSERT INTO ...", (...))
 
-    Вложенные вызовы не поддерживаются (SQLite не допускает двойной
-    BEGIN на одном соединении) — верхний уровень всегда один.
+    Вложенные вызовы поддерживаются через SAVEPOINT: вложенный блок
+    присоединяется к активной транзакции внешнего уровня и не может
+    «утянуть» её за собой — при его ошибке откатывается только savepoint.
+    Верхний уровень использует BEGIN IMMEDIATE (единоличная запись).
     """
     import contextlib
+
+    _state = getattr(_tls, "conn", None)
+    if _state is not None:
+        # Вложенный уровень: SAVEPOINT вместо нового BEGIN/своего соединения.
+        depth = _depth.value + 1
+        sp = f"sp_{depth}"
+
+        @contextlib.contextmanager
+        def _nested():
+            _depth.value = depth
+            try:
+                _state.execute(f"SAVEPOINT {sp}")
+                yield _state
+                _state.execute(f"RELEASE SAVEPOINT {sp}")
+            except Exception:
+                _state.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                raise
+            finally:
+                _depth.value = depth - 1
+
+        return _nested()
 
     @contextlib.contextmanager
     def _scope():
         conn = connect_to_db()
+        _tls.conn = conn
+        _depth.value = 1
         try:
             conn.execute("BEGIN IMMEDIATE")
             yield conn
@@ -101,12 +135,25 @@ def transaction() -> Iterator[sqlite3.Connection]:
             conn.rollback()
             raise
         finally:
+            _depth.value = 0
+            _tls.conn = None
             conn.close()
 
     return _scope()
 
 # Функция для выполнения SQL-запросов
 def execute_query(query: str, params: tuple | list | None = None, fetch: bool = False) -> list[sqlite3.Row] | None:
+    # Внутри transaction() все запросы идут на транзакционное соединение
+    # (thread-local), иначе log_action/SELECT из пакетного блока открыли бы
+    # второе WRITE-соединение и получили «database is locked».
+    txn_conn = getattr(_tls, "conn", None)
+    if txn_conn is not None:
+        txn_conn.row_factory = sqlite3.Row
+        cursor = txn_conn.cursor()
+        cursor.execute(query, params or ())
+        result = cursor.fetchall() if fetch else None
+        cursor.close()
+        return result
     conn = connect_to_db()
     # sqlite3.Row поддерживает и доступ по индексу (row[0]), и по имени
     # колонки (row["o_surname"]) — обратная совместимость сохранена.
