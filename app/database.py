@@ -1479,7 +1479,9 @@ def get_student_total_points(student_id, semester=None):
 
 
 def save_individual_plan(student_id, semester, plan_text, status="draft",
-                         approved_by=None):
+                         approved_by=None, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="save_individual_plan")
     existing = execute_query(
         "SELECT id FROM individual_plans WHERE student_id = ? AND semester = ?",
         (student_id, int(semester)), fetch=True)
