@@ -37,6 +37,8 @@ class KantslerApp(ft.Column):
         ("catalog", "RoadmapCatalogPage", "Достижения Road Map", ft.Icons.CELL_TOWER),
         ("expert", "RoadmapExpertPage", "Экспертиза", ft.Icons.VERIFIED),
         ("ipr", "RoadmapIprPage", "ИПР курсанта", ft.Icons.EVENT_NOTE),
+        ("rating", "RoadmapRatingPage", "Рейтинг Road Map", ft.Icons.EMOJI_EVENTS),
+        ("reports", "RoadmapReportsPage", "Отчётные формы", ft.Icons.PRINT),
     ]
     ADMIN_ITEMS = [
         ("users", "UsersPage", "Пользователи", ft.Icons.PERSON_ADD_ALT),

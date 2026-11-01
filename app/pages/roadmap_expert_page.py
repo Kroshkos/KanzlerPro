@@ -190,7 +190,7 @@ class RoadmapExpertPage(ft.Column):
             rows.append(ft.DataRow(cells=[
                 ft.DataCell(ft.Text(str(r["id"]))),
                 ft.DataCell(ft.Text(fio, size=12)),
-                ft.DataCell(ft.Text((r["ach_name"] or r["achievement_id"])[:70], size=12)),
+                ft.DataCell(ft.Text(str(r["ach_name"] or r["achievement_id"] or "—")[:70], size=12)),
                 ft.DataCell(ft.Text(str(r["semester"]))),
                 ft.DataCell(status_chip(r["status"])),
                 ft.DataCell(ft.Text(str(r["final_points"] or "—"), weight="bold")),

@@ -138,7 +138,7 @@ class DashboardPage(ft.Column):
                         ft.Text(str(r["pts"] or 0), size=12, weight="bold",
                                 color=PRIMARY)]),
                 ft.ProgressBar(value=frac, color=PRIMARY, bgcolor="#e2e8f0",
-                               minHeight=8),
+                               bar_height=8),
             ], spacing=2))
         if not block_rows:
             block_rows.append(ft.Text("Нет данных: одобрённые решения появятся "
