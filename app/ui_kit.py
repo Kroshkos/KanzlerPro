@@ -36,8 +36,14 @@ def _all(color):
 # ---------------------------------------------------------------------------
 # Базовые контейнеры
 # ---------------------------------------------------------------------------
-def card(content, *, padding=PAD_CARD, border=True, bgcolor=CARD_BG):
-    """Белая карточка с мягкой тенью — универсальный блок контента."""
+def card(*contents, padding=PAD_CARD, border=True, bgcolor=CARD_BG):
+    """Белая карточка с мягкой тенью — универсальный блок контента.
+
+    Принимает один контрол или несколько (тогда оборачивает в Column).
+    """
+    content = list(contents) if len(contents) > 1 else contents[0]
+    if isinstance(content, list):
+        content = ft.Column(content, spacing=6)
     return ft.Container(
         content=content,
         padding=padding,
@@ -80,7 +86,7 @@ def empty_state(message: str, *, icon=ft.Icons.SEARCH, hint=None):
         content=ft.Column(controls, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                           alignment=ft.MainAxisAlignment.CENTER, spacing=8),
         padding=30,
-        alignment=ft.alignment.center,
+        alignment=ft.Alignment(0, 0),
     )
 
 
@@ -93,7 +99,7 @@ def info_chip(label: str, value, *, color=PRIMARY):
                      color=PRIMARY_DARK)],
             spacing=5,
         ),
-        padding=ft.padding.symmetric(horizontal=10, vertical=6),
+        padding=ft.Padding(left=10, right=10, top=6, bottom=6),
         bgcolor=BG_SOFT,
         border_radius=8,
     )
@@ -104,7 +110,7 @@ def badge(text: str, *, color=PRIMARY):
     return ft.Container(
         content=ft.Text(text, size=11, weight=ft.FontWeight.W_600, color="white"),
         bgcolor=color,
-        padding=ft.padding.symmetric(horizontal=8, vertical=3),
+        padding=ft.Padding(left=8, right=8, top=3, bottom=3),
         border_radius=999,
     )
 
@@ -129,7 +135,7 @@ def notice(text: str, *, kind: str = "info"):
         bgcolor=f"{c}14",
         border=_all(f"{c}55"),
         border_radius=10,
-        padding=ft.padding.symmetric(horizontal=12, vertical=9),
+        padding=ft.Padding(left=12, right=12, top=9, bottom=9),
     )
     return box
 
@@ -219,8 +225,8 @@ def cell(text, *, bold=False, align_right=False, color=None, size=13):
                weight=ft.FontWeight.W_600 if bold else ft.FontWeight.NORMAL,
                color=color or PRIMARY_DARK)
     return ft.Container(t, padding=8,
-                        alignment=ft.alignment.center_right if align_right
-                        else ft.alignment.center_left)
+                        alignment=ft.Alignment(1, 0) if align_right
+                        else ft.Alignment(-1, 0))
 
 
 # ---------------------------------------------------------------------------

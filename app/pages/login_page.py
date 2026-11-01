@@ -1,6 +1,6 @@
 import flet as ft
-
 import ui_kit as k
+
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 from database import check_user, log_action
 from utils import session_set
@@ -16,10 +16,7 @@ class LoginPage(ft.Column):
             expand=True,
         )
         # Фон приложения задаём на уровне страницы (у Column в Flet 1.x нет bgcolor)
-        try:
-            page.bgcolor = k.BG_SOFT
-        except Exception:
-            pass
+        page.bgcolor = k.BG_SOFT
         # В Flet >= 0.29 у Control.page — свойство только для чтения,
         # поэтому сохраняем ссылку на страницу в собственном атрибуте _page.
         self._page = page

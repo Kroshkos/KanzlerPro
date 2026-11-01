@@ -8,9 +8,6 @@ Flet-контролы можно создавать без запущенног�
 import flet as ft
 import pytest
 
-import database as db
-import repositories as repo
-
 
 class _FakeSession(dict):
     """dict-хранилище — заглушка page.session (SessionStorage)."""
@@ -36,6 +33,7 @@ def fake_page():
 
 
 def _make_student(surname, name, middlename, group, course):
+    import repositories as repo
     repo.add_student({
         "o_surname": surname, "o_name": name, "o_lastname": middlename,
         "o_group_name": group, "o_course": course,
@@ -77,6 +75,7 @@ class TestSearchPage:
         sp = SearchPage(fake_page)
         sp.search_surname.value = "Иванов"
         sp.perform_search(None)
+        assert len(sp.results_container.controls) == 2  # заголовок + список карточек
         texts = []
         def walk(c):
             if isinstance(c, ft.Text) and c.value:
@@ -124,9 +123,9 @@ class TestLoginPage:
         assert lp.notice.control.visible is True
 
     def test_login_wrong_password_shows_error(self, db, fake_page):
+        from database import add_user
         from pages.login_page import LoginPage
-        import auth
-        auth.create_user("boss", "secret123", "Администратор")
+        add_user("boss", "secret123", "Администратор")
         lp = LoginPage(fake_page)
         lp.username.value = "boss"
         lp.password.value = "WRONG"
