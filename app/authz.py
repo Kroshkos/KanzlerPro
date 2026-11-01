@@ -45,7 +45,7 @@ def require_admin(page, message="Недостаточно прав"):
             ft.Text(message, size=16, color=TEXT_MUTED),
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             alignment=ft.MainAxisAlignment.CENTER),
-        alignment=ft.alignment.center, expand=True)
+        alignment=ft.Alignment(0, 0), expand=True)  # center: в Flet 1.x нет ft.alignment.center
 
 
 #: Классы страниц, требующие роль «Администратор».
