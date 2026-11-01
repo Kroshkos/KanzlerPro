@@ -1,0 +1,15 @@
+# Предкоммит-проверки (BACKLOG D-1): ruff + компиляция всех модулей.
+# Установка: pre-commit install (предварительно pip install pre-commit)
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+  - repo: local
+    hooks:
+      - id: compileall
+        name: python -m compileall (синтаксис app/main/tests)
+        entry: python -m compileall -q app main.py tests
+        language: system
+        pass_filenames: false
