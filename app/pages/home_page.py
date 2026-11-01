@@ -417,23 +417,46 @@ class KantslerApp(ft.Column):
                    title=f"Поиск: {query}")
 
     # ------------------------------------------------------------------
-    # Уведомления о новых заявках на экспертизу (колокольчик в шапке)
+    # Уведомления: заявки на экспертизу + сроки по ИПР (F-3)
+    # (колокольчик в шапке)
     # ------------------------------------------------------------------
+    def _is_admin_session(self) -> bool:
+        """Роль текущего пользователя (фильтр админ-разделов панели F-3)."""
+        return is_admin(self._fpage)
+
     def refresh_notifications(self):
-        """Пересчитывает счётчик заявок 'на рассмотрении' на бейдже."""
+        """Пересчитывает суммарный счётчик уведомлений на бейдже.
+
+        F-3: помимо заявок на экспертизу учитываются незакрытые семестровые
+        статусы и неподтверждённые баллы (для администраторов).
+        """
+        pending = 0
         try:
             from database import count_pending_reviews
             pending = int(count_pending_reviews())
         except Exception:
             pending = 0
+        extra = 0
+        if self._is_admin_session():
+            try:
+                from database import count_students_missing_semester_status, count_unresolved_reviews
+                extra += int(count_unresolved_reviews())
+                extra += int(count_students_missing_semester_status())
+            except Exception:
+                log_except("home_page: счётчики уведомлений F-3")
+        total = max(pending, 0) + max(extra, 0)
         self._pending_reviews_count = pending
-        self._notif_badge.content.value = str(pending if pending < 100 else "99+")
-        self._notif_badge.visible = pending > 0
-        self._notif_btn.icon = (ft.Icons.NOTIFICATIONS_ACTIVE if pending > 0
+        self._notif_badge.content.value = str(total if total < 100 else "99+")
+        self._notif_badge.visible = total > 0
+        self._notif_btn.icon = (ft.Icons.NOTIFICATIONS_ACTIVE if total > 0
                                 else ft.Icons.NOTIFICATIONS_NONE)
-        self._notif_btn.tooltip = (
-            f"Уведомления: новых заявок на экспертизу — {pending}"
-            if pending else "Новых заявок на экспертизу нет")
+        tooltip = []
+        if pending:
+            tooltip.append(f"заявки на экспертизу — {pending}")
+        if extra:
+            tooltip.append(f"прочие просрочки — {extra}")
+        self._notif_btn.tooltip = ("Уведомления: " + "; ".join(tooltip)
+                                   if tooltip else "Новых уведомлений нет")
 
     def notifications_click(self, e=None):
         """Показывает панель последних неотработанных заявок."""
@@ -485,6 +508,48 @@ class KantslerApp(ft.Column):
                     on_click=lambda ev, sid=to_int(_g(r, "student_id")):
                         self.open_expert_for_student(sid),
                 ))
+
+        # --- F-3: раздел «Сроки по ИПР»: курсанты без семестрового статуса ---
+        # Скрываем админ-раздел от студентов: навигации недостаточно —
+        # панель уведомлений доступна из шапки на любой странице.
+        if self._is_admin_session():
+            try:
+                from database import students_missing_semester_status
+                missing = students_missing_semester_status(limit=8) or []
+            except Exception:
+                log_except("home_page: загрузка сроков по ИПР")
+                missing = []
+            if missing:
+                items.append(ft.Container(
+                    padding=ft.Padding(14, 10, 14, 4),
+                    content=ft.Text("Сроки по ИПР · нет семестрового статуса",
+                                    size=11.5, weight="bold",
+                                    color=TEXT_MUTED)))
+                for r in missing:
+                    fio = " ".join(x for x in [_g(r, "o_surname"), _g(r, "o_name"),
+                                               _g(r, "o_lastname")]
+                                   if x != "—") or "—"
+                    grp = _g(r, "o_group_name")
+                    items.append(
+                        ft.Container(
+                            ink=True,
+                            padding=ft.Padding(12, 8, 12, 8),
+                            border=ft.Border(bottom=ft.BorderSide(1, "#f1f5f9")),
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.SCHOOL, size=18,
+                                        color="#6366f1"),
+                                ft.Column([
+                                    ft.Text(fio, size=13, weight="bold",
+                                            color=TEXT_DARK, no_wrap=True),
+                                    ft.Text(f"группа {grp}",
+                                            size=11.5, color=TEXT_MUTED,
+                                            no_wrap=True,
+                                            overflow=ft.TextOverflow.ELLIPSIS),
+                                ], spacing=2, expand=True),
+                            ]),
+                            on_click=lambda ev, sid=to_int(_g(r, "student_id")):
+                                self.open_ipr_for_student(sid),
+                        ))
         panel = ft.Container(
             width=360,
             bgcolor="#ffffff",
@@ -554,6 +619,12 @@ class KantslerApp(ft.Column):
                 holder.update()
             except Exception:
                 log_except("home_page: блок на строке 548")
+
+    def open_ipr_for_student(self, student_id):
+        """Из уведомления F-3 — открыть ИПР курсанта (страница сама проверит права)."""
+        self.close_notifications()
+        self.go_to("RoadmapIprPage", key="ipr", title="ИПР (Дорожная карта)",
+                   keep_selection=student_id)
 
     def show_legacy_menu(self):
         """Совместимость: старое меню убрано — открываем дашборд."""

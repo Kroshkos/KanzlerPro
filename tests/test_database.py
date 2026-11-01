@@ -133,3 +133,44 @@ def test_log_action_and_get_logs(db):
     logs = db.get_logs()
     assert any("тестовое действие" in str(l["action"] if hasattr(l, "keys") else l[2])
                for l in logs)
+
+
+# ---------- F-3: уведомления о сроках (семестровые статусы, баллы) ----------
+
+def test_students_missing_semester_status(db):
+    """Курсант без статуса попадает в список; закрытый семестр — исчезает."""
+    sid1 = _add_student(db)
+    sid2 = db.execute_query(
+        "INSERT INTO students (o_surname, o_name, o_lastname, o_course,"
+        " o_group_name) VALUES ('Петров','Пётр','Петрович',3,'А-12')"
+        " RETURNING id", fetch=True)[0]["id"]
+
+    rows = db.students_missing_semester_status(semester=1)
+    ids = {r["student_id"] for r in rows}
+    assert sid1 in ids and sid2 in ids
+    assert db.count_students_missing_semester_status(semester=1) == 2
+
+    db.set_semester_status(sid1, 1, is_candidate=True, actor_role=db.ADMIN_ROLE)
+    rows = db.students_missing_semester_status(semester=1)
+    ids = {r["student_id"] for r in rows}
+    assert sid1 not in ids and sid2 in ids
+    assert db.count_students_missing_semester_status(semester=1) == 1
+
+
+def test_count_unresolved_reviews_scoped_by_semester(db):
+    """Счётчик неподтверждённых баллов учитывает только указанный семестр."""
+    sid = _add_student(db)
+    _seed_achievement(db)
+    db.add_review(sid, "ach_test_1", semester=2, actor_role=db.ADMIN_ROLE)
+    assert db.count_unresolved_reviews(semester=2) == 1
+    assert db.count_unresolved_reviews(semester=1) == 0
+    # без ограничения — все pending
+    assert db.count_unresolved_reviews() == 1
+
+
+def test_notifications_functions_survive_empty_db(db):
+    """На пустой базе функции уведомлений возвращают нули/пусто, не падая."""
+    db.execute_query("DELETE FROM students")
+    assert db.students_missing_semester_status() == []
+    assert db.count_students_missing_semester_status() == 0
+    assert db.count_unresolved_reviews() == 0

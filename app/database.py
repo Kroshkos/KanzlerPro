@@ -1633,18 +1633,6 @@ def calculate_final_points(calc_type: str, base_points: int | None, k_ur: float 
     return round(total + int(ip_bonus or 0))
 
 
-def count_pending_reviews() -> int:
-    """Число заявок на экспертизу Road Map в статусе 'на рассмотрении'."""
-    try:
-        rows = execute_query(
-            "SELECT COUNT(*) FROM roadmap_reviews WHERE status = 'pending'",
-            fetch=True)
-        return int(rows[0][0]) if rows else 0
-    except Exception:
-        log_except("database: count_pending_reviews")
-        return 0
-
-
 def get_recent_pending_reviews(limit: int = 10) -> list[sqlite3.Row]:
     """Последние новые заявки (для колокольчика уведомлений).
 
@@ -1877,6 +1865,89 @@ def get_semester_average(student_id: int, semester: int) -> float | None:
         "WHERE student_id = ? AND semester = ?",
         (student_id, int(semester)), fetch=True)
     return rows[0]["average_score"] if rows else None
+
+
+def count_pending_reviews() -> int:
+    """Число заявок на экспертизу Road Map в статусе 'на рассмотрении'."""
+    try:
+        rows = execute_query(
+            "SELECT COUNT(*) FROM roadmap_reviews WHERE status = 'pending'",
+            fetch=True)
+        return int(rows[0][0]) if rows else 0
+    except Exception:
+        log_except("database: count_pending_reviews")
+        return 0
+
+
+# --- F-3: уведомления о сроках (семестровые статусы и неподтверждённые баллы)
+
+SEMESTERS_MIN, SEMESTERS_MAX = 1, 8
+
+
+def _semester_bounds(semester: int | None) -> tuple[int, int]:
+    """Границы диапазона семестров для запросов уведомлений."""
+    if semester is not None:
+        s = max(int(semester), 1)
+        return s, s
+    return SEMESTERS_MIN, SEMESTERS_MAX
+
+
+def count_unresolved_reviews(semester: int | None = None) -> int:
+    """Число заявок Road Map без решения (pending) — «неподтверждённые баллы»."""
+    lo, hi = _semester_bounds(semester)
+    try:
+        rows = execute_query(
+            "SELECT COUNT(*) FROM roadmap_reviews "
+            "WHERE status = 'pending' AND semester BETWEEN ? AND ?",
+            (lo, hi), fetch=True)
+        return int(rows[0][0]) if rows else 0
+    except Exception:
+        log_except("database: count_unresolved_reviews")
+        return 0
+
+
+def students_missing_semester_status(semester: int | None = None,
+                                     limit: int = 50) -> list[sqlite3.Row]:
+    """Курсанты без записи семестрового статуса за семестр (или несколько).
+
+    Используется колокольчиком уведомлений (F-3): незакрытые семестровые
+    статусы («кандидат»/«резидент») — сигнал куратору и курсанту.
+    """
+    lo, hi = _semester_bounds(semester)
+    try:
+        return execute_query(
+            "SELECT s.id AS student_id, s.o_surname, s.o_name, "
+            "       s.o_lastname, s.o_group_name, s.o_course, "
+            "       CAST(? || '' AS INTEGER) AS semester_lo, "
+            "       CAST(? || '' AS INTEGER) AS semester_hi "
+            "FROM students s "
+            "WHERE s.id NOT IN ("
+            "    SELECT ss.student_id FROM student_semester_status ss "
+            "    WHERE ss.semester BETWEEN ? AND ?"
+            ") "
+            "ORDER BY s.o_course, s.o_surname, s.o_name, s.o_lastname "
+            "LIMIT ?",
+            (lo, hi, lo, hi, int(limit)), fetch=True) or []
+    except Exception:
+        log_except("database: students_missing_semester_status")
+        return []
+
+
+def count_students_missing_semester_status(semester: int | None = None) -> int:
+    """То же, что students_missing_semester_status, но только счётчик (для бейджа)."""
+    lo, hi = _semester_bounds(semester)
+    try:
+        rows = execute_query(
+            "SELECT COUNT(*) FROM students s "
+            "WHERE s.id NOT IN ("
+            "    SELECT ss.student_id FROM student_semester_status ss "
+            "    WHERE ss.semester BETWEEN ? AND ?"
+            ")",
+            (lo, hi), fetch=True)
+        return int(rows[0][0]) if rows else 0
+    except Exception:
+        log_except("database: count_students_missing_semester_status")
+        return 0
 
 
 def get_roadmap_stats() -> dict[str, Any]:
