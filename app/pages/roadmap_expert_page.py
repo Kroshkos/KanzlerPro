@@ -6,6 +6,7 @@
 """
 
 import flet as ft
+from access import PermissionDeniedError
 from authz import is_admin, require_admin
 from database import (
     BLOCK_NAMES,
@@ -168,6 +169,13 @@ class RoadmapExpertPage(ft.Column):
                    "Недостаточно прав: экспертиза доступна только администратору")
         return False
 
+    def _deny_snack(self):
+        """B-1: единый ответ на отказ серверного слоя прав."""
+        from utils import show_snack
+        show_snack(self._page,
+                   "Недостаточно прав: действие доступно только администратору")
+        self._page.update()
+
     def add_new_review(self, e):
         if not self._guard_write():
             return
@@ -199,11 +207,21 @@ class RoadmapExpertPage(ft.Column):
             # таким статусом лишь помечал строку и она навсегда исчезала
             # из всех фильтров (get_reviews возвращает только известные
             # статусы) — фактически это была тихая порча данных.
-            delete_review(review_id)
+            try:
+                # B-1: серверная проверка прав — роль из сессии
+                delete_review(review_id, actor_role=session_get(self._page, "role"))
+            except PermissionDeniedError:
+                self._deny_snack()
+                return
             log_action(session_get(self._page, "username"),
                        f"Road Map: удалена заявка №{review_id}")
         else:
-            update_review(review_id, status, final_points=final_points)
+            try:
+                update_review(review_id, status, final_points=final_points,
+                              actor_role=session_get(self._page, "role"))
+            except PermissionDeniedError:
+                self._deny_snack()
+                return
             log_action(session_get(self._page, "username"),
                        f"Road Map: решение '{status}' по заявке №{review_id}")
         self.refresh_table()
@@ -257,7 +275,12 @@ class RoadmapExpertPage(ft.Column):
         calc = ach["calc_type"] if ach else "ms"
         final = calculate_final_points(calc, pts, k_ur, k_role, k_vn, k_st,
                                        duration_months, grant_amount, ip_bonus)
-        update_review(review_id, "approved", final_points=final)
+        try:
+            update_review(review_id, "approved", final_points=final,
+                          actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            self._deny_snack()
+            return
         log_action(session_get(self._page, "username"),
                    f"Road Map: одобрена заявка №{review_id} ({final} баллов)")
         self.refresh_table()

@@ -139,3 +139,74 @@ def test_unscoped_mode_flag(db):
             db.add_user("blocked_call", "pwd123456")
     finally:
         access.ALLOW_UNSCOPED = True
+
+
+# ---------- B-1: расширенные мутаторы (ВПР и Дорожная карта) ----------
+
+def _first_student_id(db):
+    rows = db.execute_query(
+        "INSERT INTO students (o_surname, o_name, o_lastname, o_course,"
+        " o_group_name) VALUES ('Тест','Иван','Иванович',1,'ГР-1') RETURNING id",
+        fetch=True)
+    return rows[0]["id"]
+
+
+@pytest.mark.parametrize("actor_role", ["Пользователь", "Гость"])
+def test_vpr_mutations_denied_for_non_admin(db, actor_role):
+    """B-1: поощрения/взыскания (vpr_page) проверяют права на сервере."""
+    from access import PermissionDeniedError
+    sid = _first_student_id(db)
+    with pytest.raises(PermissionDeniedError):
+        db.add_encouragement(sid, "Благодарность", "за успехи", "Начальник",
+                             "2026-01-01", "№1", actor_role=actor_role)
+    with pytest.raises(PermissionDeniedError):
+        db.add_penalty(sid, "Выговор", "за нарушение", "2026-01-01",
+                       "Начальник", "2026-01-02", "№2", actor_role=actor_role)
+    # данные не изменились
+    assert db.get_encouragements_by_student(sid) == []
+    assert db.get_penalties_by_student(sid) == []
+
+
+def test_vpr_mutations_allowed_for_admin(db):
+    from constants import ADMIN_ROLE
+    sid = _first_student_id(db)
+    db.add_encouragement(sid, "Благодарность", "за успехи", "Начальник",
+                         "2026-01-01", "№1", actor_role=ADMIN_ROLE)
+    db.add_penalty(sid, "Выговор", "за нарушение", "2026-01-01",
+                   "Начальник", "2026-01-02", "№2", actor_role=ADMIN_ROLE)
+    assert len(db.get_encouragements_by_student(sid)) == 1
+    assert len(db.get_penalties_by_student(sid)) == 1
+
+
+@pytest.mark.parametrize("actor_role", ["Пользователь", "Гость"])
+def test_review_mutations_denied_for_non_admin(db, actor_role):
+    """B-1: решения экспертизы (roadmap_expert_page) проверяют права."""
+    from access import PermissionDeniedError
+    sid = _first_student_id(db)
+    rid = db.execute_query(
+        "INSERT INTO roadmap_reviews (student_id, achievement_id, semester,"
+        " status) VALUES (?, 'A1', 1, 'pending') RETURNING id",
+        (sid,), fetch=True)[0]["id"]
+    with pytest.raises(PermissionDeniedError):
+        db.update_review(rid, "approved", final_points=10, actor_role=actor_role)
+    with pytest.raises(PermissionDeniedError):
+        db.delete_review(rid, actor_role=actor_role)
+    row = db.execute_query("SELECT status FROM roadmap_reviews WHERE id=?",
+                           (rid,), fetch=True)[0]
+    assert row["status"] == "pending"
+
+
+def test_review_mutations_allowed_for_admin(db):
+    from constants import ADMIN_ROLE
+    sid = _first_student_id(db)
+    rid = db.execute_query(
+        "INSERT INTO roadmap_reviews (student_id, achievement_id, semester,"
+        " status) VALUES (?, 'A1', 1, 'pending') RETURNING id",
+        (sid,), fetch=True)[0]["id"]
+    db.update_review(rid, "approved", final_points=10, actor_role=ADMIN_ROLE)
+    row = db.execute_query("SELECT status, final_points FROM roadmap_reviews"
+                           " WHERE id=?", (rid,), fetch=True)[0]
+    assert row["status"] == "approved" and row["final_points"] == 10
+    db.delete_review(rid, actor_role=ADMIN_ROLE)
+    assert db.execute_query("SELECT id FROM roadmap_reviews WHERE id=?",
+                            (rid,), fetch=True) == []

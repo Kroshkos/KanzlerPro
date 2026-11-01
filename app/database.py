@@ -60,6 +60,12 @@ def execute_query(query, params=None, fetch=False):
     cursor.execute(query, params or ())
     if fetch:
         result = cursor.fetchall()
+        # ВАЖНО: fetch=True раньше пропускал commit(). Для запросов вида
+        # «INSERT ... RETURNING» это означало незакоммиченную транзакцию:
+        # строка не попадала в файл БД, а conn.close() откатывал её, из-за
+        # чего последующие вставки с FK падали с "FOREIGN KEY constraint
+        # failed". Читающие SELECT коммит безвреден, поэтому коммитим всегда.
+        conn.commit()
     else:
         conn.commit()
         result = None
@@ -1081,7 +1087,10 @@ def search_all_reviews():
 
 
 # Добавление поощрения
-def add_encouragement(student_id, encouragement_type, reason, issued_by, date_obj, order_number):
+def add_encouragement(student_id, encouragement_type, reason, issued_by, date_obj, order_number,
+                      actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_encouragement")
     query = """
     INSERT INTO encouragements (student_id, encouragement_type, reason, issued_by, date, order_number)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -1097,7 +1106,10 @@ def get_encouragements_by_student(student_id):
     return execute_query(query, (student_id,), fetch=True)
 
 # Добавление взыскания
-def add_penalty(student_id, penalty_type, reason, date_reason, issued_by, date_obj, order_number):
+def add_penalty(student_id, penalty_type, reason, date_reason, issued_by, date_obj, order_number,
+                actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_penalty")
     query = """
     INSERT INTO penalties (student_id, penalty_type, reason, date_reason, issued_by, date, order_number)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1408,7 +1420,9 @@ def add_review(student_id, achievement_id, semester, status="pending",
          duration_months, grant_amount, ip_bonus, now))
 
 
-def update_review(review_id, status, comment=None, final_points=None):
+def update_review(review_id, status, comment=None, final_points=None, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="update_review")
     execute_query(
         """UPDATE roadmap_reviews SET status = ?, expert_comment = ?,
            reviewed_at = ?, final_points = ? WHERE id = ?""",
@@ -1416,7 +1430,9 @@ def update_review(review_id, status, comment=None, final_points=None):
          final_points, review_id))
 
 
-def delete_review(review_id):
+def delete_review(review_id, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="delete_review")
     execute_query("DELETE FROM roadmap_reviews WHERE id = ?", (review_id,))
 
 
