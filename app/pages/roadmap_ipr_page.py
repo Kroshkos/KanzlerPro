@@ -6,6 +6,7 @@
 """
 
 import flet as ft
+from access import PermissionDeniedError
 from database import (
     BLOCK_NAMES,
     add_manual_score,
@@ -229,8 +230,15 @@ class RoadmapIprPage(ft.Column):
         except ValueError:
             show_snack(self._page, "Баллы должны быть числом")
             return
-        add_manual_score(sid, self._semester(), to_int(self.block_dd.value),
-                         score, self.comment_field.value or "")
+        try:
+            # B-1: серверная проверка прав — роль из сессии
+            add_manual_score(sid, self._semester(), to_int(self.block_dd.value),
+                             score, self.comment_field.value or "",
+                             actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            show_snack(self._page,
+                       "Недостаточно прав: действие доступно только администратору")
+            return
         log_action(self.username, f"ИПР: ручной балл {score} для студента {sid}")
         self.score_field.value = "0"
         self.comment_field.value = ""
@@ -238,7 +246,14 @@ class RoadmapIprPage(ft.Column):
         self._page.update()
 
     def remove_score(self, score_id):
-        delete_manual_score(score_id)
+        try:
+            # B-1: серверная проверка прав — роль из сессии
+            delete_manual_score(score_id,
+                                 actor_role=session_get(self._page, "role"))
+        except PermissionDeniedError:
+            show_snack(self._page,
+                       "Недостаточно прав: действие доступно только администратору")
+            return
         self.refresh_scores()
         self._page.update()
 

@@ -210,3 +210,57 @@ def test_review_mutations_allowed_for_admin(db):
     db.delete_review(rid, actor_role=ADMIN_ROLE)
     assert db.execute_query("SELECT id FROM roadmap_reviews WHERE id=?",
                             (rid,), fetch=True) == []
+
+
+# --- B-1: справочник достижений и ручные баллы ИПР ------------------------
+
+@pytest.mark.parametrize("actor_role", ["Пользователь", "Гость"])
+def test_catalog_mutations_denied_for_non_admin(db, actor_role):
+    """B-1: мутации справочника достижений проверяют права на сервере."""
+    from access import PermissionDeniedError
+    with pytest.raises(PermissionDeniedError):
+        db.add_achievement("X1", 1, "Тест", 5, actor_role=actor_role)
+    with pytest.raises(PermissionDeniedError):
+        db.delete_achievement("1", actor_role=actor_role)
+    with pytest.raises(PermissionDeniedError):
+        db.import_achievements_from_csv("dummy.csv", actor_role=actor_role)
+
+
+def test_catalog_mutations_allowed_for_admin(db):
+    from constants import ADMIN_ROLE
+    db.add_achievement("X1", 1, "Тестовое достижение", 5,
+                       actor_role=ADMIN_ROLE)
+    rows = [r for r in db.get_achievements() if r["id"] == "X1"]
+    assert len(rows) == 1
+    db.delete_achievement("X1", actor_role=ADMIN_ROLE)
+    assert not [r for r in db.get_achievements() if r["id"] == "X1"]
+
+
+@pytest.mark.parametrize("actor_role", ["Пользователь", "Гость"])
+def test_manual_score_mutations_denied_for_non_admin(db, actor_role):
+    """B-1: ручные баллы ИПР (roadmap_ipr_page) проверяют права на сервере."""
+    from access import PermissionDeniedError
+    sid = _first_student_id(db)
+    with pytest.raises(PermissionDeniedError):
+        db.add_manual_score(sid, 1, 1, 10, actor_role=actor_role)
+    # существующую запись тоже нельзя удалять без прав
+    from constants import ADMIN_ROLE
+    db.add_manual_score(sid, 1, 1, 10, actor_role=ADMIN_ROLE)
+    ms_id = db.execute_query(
+        "SELECT id FROM manual_scores WHERE student_id=?", (sid,),
+        fetch=True)[0]["id"]
+    with pytest.raises(PermissionDeniedError):
+        db.delete_manual_score(ms_id, actor_role=actor_role)
+    assert db.get_manual_scores(student_id=sid)  # данные не тронуты
+
+
+def test_manual_score_mutations_allowed_for_admin(db):
+    from constants import ADMIN_ROLE
+    sid = _first_student_id(db)
+    db.add_manual_score(sid, 2, 1, 7, "проверка", actor_role=ADMIN_ROLE)
+    rows = [r for r in db.get_manual_scores(student_id=sid)
+            if r["semester"] == 2]
+    assert rows and rows[0]["score"] == 7
+    db.delete_manual_score(rows[0]["id"], actor_role=ADMIN_ROLE)
+    assert not [r for r in db.get_manual_scores(student_id=sid)
+                if r["id"] == rows[0]["id"]]

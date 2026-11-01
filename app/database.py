@@ -1260,14 +1260,19 @@ def get_blocks():
     return sorted(BLOCK_NAMES.items())
 
 
-def add_achievement(ach_id, block, name, points, version="", calc_type="ms"):
+def add_achievement(ach_id, block, name, points, version="", calc_type="ms",
+                    actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_achievement")
     execute_query(
         "INSERT OR REPLACE INTO achievements_catalog "
         "(id, block, name, points, version, calc_type) VALUES (?, ?, ?, ?, ?, ?)",
         (str(ach_id), int(block), name, int(points), version, calc_type))
 
 
-def delete_achievement(ach_id):
+def delete_achievement(ach_id, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="delete_achievement")
     execute_query("DELETE FROM achievements_catalog WHERE id = ?", (str(ach_id),))
 
 
@@ -1290,8 +1295,10 @@ def count_achievements():
     return rows[0]["c"] if rows else 0
 
 
-def import_achievements_from_csv(filepath):
+def import_achievements_from_csv(filepath, actor_role=None):
     """Импорт справочника достижений из CSV (формат наследия MKR)."""
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="import_achievements_from_csv")
     import csv as _csv
     added = 0
     with open(filepath, "r", encoding="utf-8-sig", newline="") as f:
@@ -1523,7 +1530,10 @@ def get_semester_status(student_id, semester):
     return rows[0] if rows else None
 
 
-def add_manual_score(student_id, semester, block, score, comment=""):
+def add_manual_score(student_id, semester, block, score, comment="",
+                     actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="add_manual_score")
     execute_query(
         "INSERT INTO manual_scores (student_id, semester, block, score, comment) "
         "VALUES (?,?,?,?,?)",
@@ -1545,7 +1555,9 @@ def get_manual_scores(student_id=None, semester=None):
     return execute_query(query, tuple(params), fetch=True)
 
 
-def delete_manual_score(score_id):
+def delete_manual_score(score_id, actor_role=None):
+    # B-1: серверная проверка прав при мутациях (см. app/access.py)
+    require_role(actor_role, action="delete_manual_score")
     execute_query("DELETE FROM manual_scores WHERE id = ?", (score_id,))
 
 
