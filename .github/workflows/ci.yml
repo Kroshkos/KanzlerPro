@@ -20,8 +20,13 @@ jobs:
         run: ruff check app main.py tests
       - name: Syntax check (compileall)
         run: python -m compileall -q app main.py
-      - name: Tests
-        run: python -m pytest -q
+      - name: Tests (+ coverage report, BACKLOG T-4)
+        # Порог покрытия намеренно не задан — первый этап: наблюдение
+        # (см. docs/BACKLOG.md, T-4).
+        run: python -m pytest -q --cov=app --cov-report=term-missing
+      - name: Doctor (smoke self-diagnostics, D-5)
+        # --no-backups: в CI база чистая, резервных копий нет намеренно
+        run: python -m app.doctor --no-backups
       - name: Dependency audit
         continue-on-error: true
         run: pip-audit -r requirements.txt

@@ -1178,11 +1178,38 @@ class ShowStudentsPage(ft.Column):
 
         from database import STUDENTS_PAGE_SIZE, count_students
         self.page_size = STUDENTS_PAGE_SIZE
+        self.checkboxes = {}
+        self.group_filter = None   # активный фильтр по группе (C-4)
+        self.course_filter = None  # активный фильтр по курсу (C-4)
+
+        # Справочники фильтров читаются через кэш (C-4): список групп/курсов
+        # меняется редко, а перерисовка страницы — при каждом действии.
+        from cache import cached as _cached
+        from database import list_courses as _list_courses
+        from database import list_groups as _list_groups
+
+        groups = _cached("students:groups",
+                         lambda: [str(r[0]) for r in (_list_groups() or [])],
+                         table="students")
+        courses = _cached("students:courses",
+                          lambda: [int(r[0]) for r in (_list_courses() or [])],
+                          table="students")
+        self.group_dropdown = ft.Dropdown(
+            label="Группа", width=160,
+            options=[ft.dropdown.Option(g) for g in groups],
+            on_select=self._filter_changed)
+        self.course_dropdown = ft.Dropdown(
+            label="Курс", width=120,
+            options=[ft.dropdown.Option(str(c)) for c in courses],
+            on_select=self._filter_changed)
+        self.reset_filter_button = ft.IconButton(
+            ft.Icons.CLEAR, tooltip="Сбросить фильтры",
+            on_click=self._reset_filters)
+
         self.total = count_students()
         self.total_pages = max(1, -(-self.total // self.page_size))  # ceil
         self.current_page = 0
 
-        self.checkboxes = {}
         self.prev_button = ft.IconButton(
             ft.Icons.CHEVRON_LEFT, on_click=self.prev_page_click,
             tooltip="Предыдущая страница")
@@ -1206,6 +1233,8 @@ class ShowStudentsPage(ft.Column):
         self.controls = [
             ft.Text("Список курсантов", size=20, weight="bold"),
             ft.Row([self.edit_button, self.back_button]),
+            ft.Row([self.group_dropdown, self.course_dropdown,
+                    self.reset_filter_button]),
             self._build_pager_row(),
             self.data_grid,
         ]
@@ -1216,11 +1245,39 @@ class ShowStudentsPage(ft.Column):
             [self.prev_button, self.page_label, self.next_button],
             alignment=ft.MainAxisAlignment.CENTER)
 
+    # --- Фильтры справочниками (C-4): группа / курс набора -------------
+
+    def _filter_changed(self, e):
+        """Меняет фильтры и перезагружает первую страницу отфильтрованного списка."""
+        self.group_filter = self.group_dropdown.value or None
+        course_val = self.course_dropdown.value
+        self.course_filter = to_int(course_val, None) \
+            if course_val not in (None, "") else None
+        self.current_page = 0
+        self._reload_counts_and_page()
+        self._page.update()
+
+    def _reset_filters(self, e):
+        self.group_dropdown.value = None
+        self.course_dropdown.value = None
+        self._filter_changed(e)
+
+    def _reload_counts_and_page(self):
+        """Пересчитывает страницы с учётом активного фильтра (C-1 + C-4)."""
+        from database import count_students
+        self.total = count_students(group_name=self.group_filter,
+                                    course=self.course_filter)
+        self.total_pages = max(1, -(-self.total // self.page_size))  # ceil
+        self.current_page = min(self.current_page, self.total_pages - 1)
+        self._load_page()
+
     def _load_page(self):
         """Загружает текущую страницу курсантов и обновляет состояние."""
         from database import get_students
         offset = self.current_page * self.page_size
-        students = get_students(limit=self.page_size, offset=offset) or []
+        students = get_students(limit=self.page_size, offset=offset,
+                                group_name=self.group_filter,
+                                course=self.course_filter) or []
         rows = []
         for student in students:
             # sqlite3.Row: доступ по именам колонок (см. database.execute_query)

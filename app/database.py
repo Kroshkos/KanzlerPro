@@ -1,9 +1,23 @@
+from __future__ import annotations
+
 import os
 import re
 import sqlite3
+import threading
+from collections.abc import Iterator
 from datetime import datetime, timedelta
+from typing import Any
 
 from access import require_role
+from cache import invalidate as _cache_invalidate
+
+# Активная транзакция потока (BACKLOG A-3): transaction() регистрирует в
+# thread-local своё WRITE-соединение, и execute_query направляет запросы
+# туда же — иначе вложенный log_action открыл бы второе соединение внутри
+# активной BEGIN ... IMMEDIATE и получил «database is locked».
+_tls = threading.local()
+_depth = threading.local()
+_depth.value = 0
 
 # Абсолютный путь к файлу базы данных (не зависит от текущей директории,
 # из которой запущено приложение — раньше БД «терялась» при запуске из другой папки)
@@ -17,7 +31,7 @@ from utils_logger import log_except
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def table_columns(table):
+def table_columns(table: str) -> set[str]:
     """Возвращает множество имён колонок таблицы (для лёгких миграций)."""
     if not _IDENTIFIER_RE.match(table):
         raise ValueError(f"Некорректное имя таблицы: {table!r}")
@@ -28,7 +42,7 @@ def table_columns(table):
         conn.close()
 
 
-def ensure_column(table, column, decl="TEXT"):
+def ensure_column(table: str, column: str, decl: str = "TEXT") -> bool:
     """Добавляет колонку в таблицу, если её ещё нет (идемпотентно).
 
     Используется миграциями схемы: старые файлы kanzler.db создавались без
@@ -45,21 +59,101 @@ def ensure_column(table, column, decl="TEXT"):
 
 
 # Подключение к базе данных SQLite
-def _lower_unicode(s):
+def _lower_unicode(s: str | None) -> str:
     """Регистронезависимость для кириллицы: встроенный LOWER() SQLite
     работает только по ASCII ('Иванов' -> 'Иванов'), из-за чего поиск по
     фамилии в нижнем регистре не находил записи с заглавной буквы."""
     return (s or "").lower()
 
 
-def connect_to_db():
+def connect_to_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)  # Файл базы данных
     conn.execute("PRAGMA foreign_keys = ON")  # включаем контроль внешних ключей
+    # WAL (BACKLOG A-3): читатели и писатель не блокируют друг друга,
+    # а падение процесса не оставляет БД повреждённой (WAL-journal
+    # восстанавливается при следующем подключении). Ошибка PRAGMA не
+    # считается фатальной: на некоторых сетевых ФС WAL недоступен.
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.Error:
+        pass
     conn.create_function("LOWER_UNICODE", 1, _lower_unicode, deterministic=True)
     return conn
 
+
+def transaction() -> Iterator[sqlite3.Connection]:
+    """Контекстный менеджер короткоживущей транзакции (BACKLOG A-3).
+
+    Пакетные операции (импорт из CSV/XLSX, каскадное удаление) должны
+    выполняться атомарно: либо все строки записаны, либо ни одной.
+    connect-per-query для этого не подходит — каждый execute_query
+    коммитит сам. Внутри transaction() SQL выполняется на переданном
+    соединении conn; при исключении блока — автоматический откат:
+
+        with transaction() as conn:
+            conn.execute("INSERT INTO ...", (...))
+            conn.execute("INSERT INTO ...", (...))
+
+    Вложенные вызовы поддерживаются через SAVEPOINT: вложенный блок
+    присоединяется к активной транзакции внешнего уровня и не может
+    «утянуть» её за собой — при его ошибке откатывается только savepoint.
+    Верхний уровень использует BEGIN IMMEDIATE (единоличная запись).
+    """
+    import contextlib
+
+    _state = getattr(_tls, "conn", None)
+    if _state is not None:
+        # Вложенный уровень: SAVEPOINT вместо нового BEGIN/своего соединения.
+        depth = _depth.value + 1
+        sp = f"sp_{depth}"
+
+        @contextlib.contextmanager
+        def _nested():
+            _depth.value = depth
+            try:
+                _state.execute(f"SAVEPOINT {sp}")
+                yield _state
+                _state.execute(f"RELEASE SAVEPOINT {sp}")
+            except Exception:
+                _state.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                raise
+            finally:
+                _depth.value = depth - 1
+
+        return _nested()
+
+    @contextlib.contextmanager
+    def _scope():
+        conn = connect_to_db()
+        _tls.conn = conn
+        _depth.value = 1
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            _depth.value = 0
+            _tls.conn = None
+            conn.close()
+
+    return _scope()
+
 # Функция для выполнения SQL-запросов
-def execute_query(query, params=None, fetch=False):
+def execute_query(query: str, params: tuple | list | None = None, fetch: bool = False) -> list[sqlite3.Row] | None:
+    # Внутри transaction() все запросы идут на транзакционное соединение
+    # (thread-local), иначе log_action/SELECT из пакетного блока открыли бы
+    # второе WRITE-соединение и получили «database is locked».
+    txn_conn = getattr(_tls, "conn", None)
+    if txn_conn is not None:
+        txn_conn.row_factory = sqlite3.Row
+        cursor = txn_conn.cursor()
+        cursor.execute(query, params or ())
+        result = cursor.fetchall() if fetch else None
+        cursor.close()
+        return result
     conn = connect_to_db()
     # sqlite3.Row поддерживает и доступ по индексу (row[0]), и по имени
     # колонки (row["o_surname"]) — обратная совместимость сохранена.
@@ -82,7 +176,7 @@ def execute_query(query, params=None, fetch=False):
     return result
 
 # Инициализация базы данных (создание таблиц)
-def init_db():
+def init_db() -> None:
     # Создание таблицы students
     query_students = """
     CREATE TABLE IF NOT EXISTS students (
@@ -345,7 +439,7 @@ def init_db():
         add_user("admin", admin_password, ADMIN_ROLE, actor_role=ADMIN_ROLE)
 
 # Логирование действия
-def log_action(username, action):
+def log_action(username: str | None, action: str) -> None:
     """Запись в журнал действий с хеш-цепочкой (BACKLOG B-5).
 
     Каждая строка хранит hash своей записи и hash предыдущей строки
@@ -365,13 +459,13 @@ def log_action(username, action):
     execute_query(query, (timestamp, username, action, prev_hash, row_hash))
 
 
-def _log_row_hash(timestamp, username, action, prev_hash):
+def _log_row_hash(timestamp: str, username: str | None, action: str, prev_hash: str) -> str:
     import hashlib
     payload = f"{prev_hash}|{timestamp}|{username}|{action}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def verify_logs_chain():
+def verify_logs_chain() -> list[int]:
     """Проверяет хеш-цепочку журнала. Возвращает список проблемных id.
 
     Пустой список = журнал не изменялся извне. Строки без row_hash
@@ -416,7 +510,7 @@ class AccountLockedError(Exception):
     """Учётка временно заблокирована из-за серии неудачных попыток входа."""
 
 
-def validate_password_strength(password):
+def validate_password_strength(password: str) -> str:
     """Проверяет пароль по политике (B-2); бросает PasswordPolicyError.
 
     Возвращает нормализованную строку пароля (без обрамляющих пробелов).
@@ -430,13 +524,13 @@ def validate_password_strength(password):
     return pwd
 
 
-def _ensure_lockout_columns():
+def _ensure_lockout_columns() -> None:
     """Идемпотентно добавляет колонки счётчика перебора в таблицу users."""
     ensure_column("users", "failed_attempts", "INTEGER NOT NULL DEFAULT 0")
     ensure_column("users", "locked_until", "TEXT")
 
 
-def _lockout_active(locked_until):
+def _lockout_active(locked_until: str | None) -> bool:
     """True, если метка блокировки ещё не истекла."""
     if not locked_until:
         return False
@@ -447,7 +541,7 @@ def _lockout_active(locked_until):
     return datetime.now() < until
 
 
-def register_failed_attempt(user_id):
+def register_failed_attempt(user_id: int) -> int:
     """Увеличивает счётчик неудачных попыток; при достижении лимита — блокирует."""
     _ensure_lockout_columns()
     now = datetime.now()
@@ -468,7 +562,7 @@ def register_failed_attempt(user_id):
     return attempts
 
 
-def reset_failed_attempts(user_id):
+def reset_failed_attempts(user_id: int) -> None:
     """Сбрасывает счётчик перебора после успешного входа."""
     _ensure_lockout_columns()
     execute_query(
@@ -482,7 +576,7 @@ def reset_failed_attempts(user_id):
 # прозрачно мигрируются в хеши при первой успешной авторизации.
 # Защита от перебора (B-2): MAX_FAILED_ATTEMPTS неудачных попыток подряд
 # временно блокируют учётку (locked_until в таблице users).
-def check_user(username, password):
+def check_user(username: str, password: str) -> list[tuple] | None:
     _ensure_lockout_columns()
     rows = execute_query(
         "SELECT id, username, role, password, "
@@ -518,7 +612,7 @@ def check_user(username, password):
 # пользовательские пароли проходят политику длины (B-2).
 # actor_role — роль инициатора (B-1): мутация требует права администратора;
 # None — легаси-вызов без сессии (переходный режим access.ALLOW_UNSCOPED).
-def add_user(username, password, role=DEFAULT_ROLE, actor_role=None):
+def add_user(username: str, password: str, role: str = DEFAULT_ROLE, actor_role: str | None = None) -> None:
     require_role(actor_role, ADMIN_ROLE, action="создание пользователя")
     pwd = (password or "").strip()
     if pwd:
@@ -530,20 +624,20 @@ def add_user(username, password, role=DEFAULT_ROLE, actor_role=None):
     execute_query(query, (username, hash_password(pwd), role))
 
 # Смена пароля пользователя (новая запись проходит политику B-2)
-def update_user_password(user_id, new_password, actor_role=None):
+def update_user_password(user_id: int, new_password: str, actor_role: str | None = None) -> None:
     require_role(actor_role, ADMIN_ROLE, action="смена пароля пользователя")
     pwd = validate_password_strength(new_password)
     query = "UPDATE users SET password = ? WHERE id = ?"
     execute_query(query, (hash_password(pwd), user_id))
 
 # Удаление пользователя
-def delete_user(user_id, actor_role=None):
+def delete_user(user_id: int, actor_role: str | None = None) -> None:
     require_role(actor_role, ADMIN_ROLE, action="удаление пользователя")
     query = "DELETE FROM users WHERE id = ?"
     execute_query(query, (user_id,))
 
 # Изменение роли пользователя (роль — только из белого списка constants.ROLES)
-def update_user_role(user_id, new_role, actor_role=None):
+def update_user_role(user_id: int, new_role: str, actor_role: str | None = None) -> None:
     require_role(actor_role, ADMIN_ROLE, action="смена роли пользователя")
     if new_role not in ROLES:
         raise ValueError(f"Недопустимая роль: {new_role!r}")
@@ -551,22 +645,65 @@ def update_user_role(user_id, new_role, actor_role=None):
     execute_query(query, (new_role, user_id))
 
 # Получение одного пользователя по id (без поля пароля)
-def get_user_by_id(user_id):
+def get_user_by_id(user_id: int) -> sqlite3.Row | None:
     rows = execute_query(
         "SELECT id, username, role FROM users WHERE id = ?", (user_id,), fetch=True)
     return rows[0] if rows else None
 
 # Получение списка пользователей
-def get_users():
+def get_users() -> list[sqlite3.Row]:
     query = "SELECT id, username, role FROM users"
     return execute_query(query, fetch=True)
 
 # Получение записей журнала
-def get_logs():
-    query = "SELECT timestamp, username, action FROM logs ORDER BY timestamp DESC"
-    return execute_query(query, fetch=True)
+LOGS_PAGE_SIZE = 100  # размер страницы журнала (продолжение C-1)
 
-def search_students_by_multiple_params(surname=None, name=None, lastname=None, group_name=None, course=None, age=None, gender=None, birthday=None, birthplace=None, citizenship=None, nationality=None, religion=None, marital_status=None, residence=None, bad_habits=None, health_status=None, interests=None, skills=None):
+
+def count_logs(date_prefix: str | None = None) -> int:
+    """Всего записей в журнале (для расчёта числа страниц, C-1).
+
+    date_prefix — необязательный префикс timestamp вида '2026-11-01%'
+    (фильтр по дате на странице журнала).
+    """
+    query = "SELECT COUNT(*) AS c FROM logs"
+    params = ()
+    if date_prefix:
+        query += " WHERE timestamp LIKE ?"
+        params = (date_prefix,)
+    rows = execute_query(query, params=params, fetch=True)
+    return int(rows[0]["c"]) if rows else 0
+
+
+def get_logs(limit: int | None = None, offset: int = 0, date_prefix: str | None = None) -> list[sqlite3.Row]:
+    """Записи журнала действий.
+
+    limit=None — все строки (обратная совместимость с dashboard_page),
+    иначе — страница размером limit со смещением offset (пагинация, C-1).
+    date_prefix — SQL-LIKE-префикс timestamp ('2026-11-01%') для фильтра
+    по дате; условие применяется до LIMIT/OFFSET, поэтому страницы
+    соответствуют отфильтрованной выборке.
+    """
+    query = "SELECT timestamp, username, action FROM logs WHERE 1=1"
+    params = []
+    if date_prefix:
+        query += " AND timestamp LIKE ?"
+        params.append(date_prefix)
+    query += " ORDER BY timestamp DESC"
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params.extend((int(limit), int(offset)))
+    return execute_query(query, params=tuple(params), fetch=True)
+
+def search_students_by_multiple_params(
+        surname: str | None = None, name: str | None = None,
+        lastname: str | None = None, group_name: str | None = None,
+        course: int | str | None = None, age: int | str | None = None,
+        gender: str | None = None, birthday: str | None = None,
+        birthplace: str | None = None, citizenship: str | None = None,
+        nationality: str | None = None, religion: str | None = None,
+        marital_status: str | None = None, residence: str | None = None,
+        bad_habits: str | None = None, health_status: str | None = None,
+        interests: str | None = None, skills: str | None = None) -> list[sqlite3.Row]:
     conn = connect_to_db()
     cursor = conn.cursor()
     
@@ -688,7 +825,7 @@ STUDENT_FIELDS = [
 ]
 
 
-def migrate_schema():
+def migrate_schema() -> list[str]:
     """Лёгкая миграция схемы: добавляет в старые БД недостающие колонки.
 
     Идемпотентна и безопасна для повторных запусков: ensure_column проверяет
@@ -719,7 +856,7 @@ def migrate_schema():
 BACKUP_KEEP = 10  # сколько последних копий хранить в data/backups
 
 
-def backup_database(db_path=None, backups_dir=None, keep=BACKUP_KEEP):
+def backup_database(db_path: str | None = None, backups_dir: str | None = None, keep: int = BACKUP_KEEP) -> str | None:
     """Копирует файл БД в каталог резервных копий с ротацией.
 
     Имя копии: kanzler_pro_YYYYMMDD_HHMMSS.db. Хранятся только `keep`
@@ -760,7 +897,7 @@ def backup_database(db_path=None, backups_dir=None, keep=BACKUP_KEEP):
     return dest
 
 
-def update_student(student_id, student_data, actor_role=None):
+def update_student(student_id: int, student_data: dict, actor_role: str | None = None) -> bool:
     """Обновляет личное дело курсанта.
 
     Обновляются только те поля из STUDENT_FIELDS, которые присутствуют в
@@ -782,13 +919,16 @@ def update_student(student_id, student_data, actor_role=None):
     try:
         cursor.execute(query, params)
         conn.commit()
-        return cursor.rowcount > 0
+        ok = cursor.rowcount > 0
     finally:
         cursor.close()
         conn.close()
+    if ok:
+        _cache_invalidate("students")  # C-4: группа/курс могли измениться
+    return ok
 
 
-def add_student(student_data, actor_role=None):
+def add_student(student_data: dict, actor_role: str | None = None) -> int:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="add_student")
     conn = connect_to_db()  # Открываем соединение с базой данных
@@ -1089,6 +1229,7 @@ def add_student(student_data, actor_role=None):
         cursor.close()
         conn.close()
 
+    _cache_invalidate("students")  # C-4: новый курсант меняет справочник групп
     return student_id
 
 
@@ -1099,29 +1240,67 @@ def add_student(student_data, actor_role=None):
 STUDENTS_PAGE_SIZE = 50
 
 
-def count_students() -> int:
-    """Всего курсантов в базе (для расчёта числа страниц пагинации, C-1)."""
-    rows = execute_query("SELECT COUNT(*) AS c FROM students", fetch=True)
+def count_students(group_name: str | None = None, course: int | None = None) -> int:
+    """Всего курсантов в базе (для расчёта числа страниц пагинации, C-1).
+
+    Фильтры group_name/course работают синхронно с get_students().
+    """
+    query = "SELECT COUNT(*) AS c FROM students WHERE 1=1"
+    params = []
+    if group_name:
+        query += " AND o_group_name = ?"
+        params.append(group_name)
+    if course is not None:
+        query += " AND o_course = ?"
+        params.append(int(course))
+    rows = execute_query(query, params=tuple(params), fetch=True)
     return int(rows[0]["c"]) if rows else 0
 
 
-def get_students(limit=None, offset=0):
+def get_students(limit: int | None = None, offset: int = 0,
+               group_name: str | None = None, course: int | None = None) -> list[sqlite3.Row]:
     """Список курсантов. limit=None — все записи (обратная совместимость),
-    иначе — страница размером limit со смещением offset (пагинация, C-1)."""
+    иначе — страница размером limit со смещением offset (пагинация, C-1).
+
+    group_name/course — необязательные фильтры справочниками (C-4):
+    точное совпадение группы / номер курса набора.
+    """
     query = ("SELECT id, o_surname, o_name, o_lastname, o_course, o_group_name "
-             "FROM students ORDER BY id")
-    params = ()
+             "FROM students WHERE 1=1")
+    params = []
+    if group_name:
+        query += " AND o_group_name = ?"
+        params.append(group_name)
+    if course is not None:
+        query += " AND o_course = ?"
+        params.append(int(course))
+    query += " ORDER BY id"
     if limit is not None:
         query += " LIMIT ? OFFSET ?"
-        params = (int(limit), int(offset))
-    return execute_query(query, params=params, fetch=True)
+        params.extend((int(limit), int(offset)))
+    return execute_query(query, params=tuple(params), fetch=True)
+
+
+def list_groups() -> list[sqlite3.Row]:
+    """Уникальные названия групп (справочник фильтров, C-4)."""
+    return execute_query(
+        "SELECT DISTINCT o_group_name FROM students "
+        "WHERE o_group_name IS NOT NULL AND o_group_name <> '' "
+        "ORDER BY o_group_name", fetch=True)
+
+
+def list_courses() -> list[sqlite3.Row]:
+    """Уникальные курсы набора в порядке возрастания (справочник, C-4)."""
+    return execute_query(
+        "SELECT DISTINCT o_course FROM students "
+        "WHERE o_course IS NOT NULL ORDER BY o_course", fetch=True)
 
 
 # --- Глобальный поиск: выборки всех записей с ФИО (для app/global_search.py).
 # Фильтрация по подстроке выполняется на стороне Python, т.к. SQLite LOWER()
 # не меняет регистр кириллицы.
 
-def search_all_encouragements():
+def search_all_encouragements() -> list[sqlite3.Row]:
     query = """
     SELECT e.id, e.encouragement_type AS kind, e.reason, e.date AS date_obj,
            s.id AS student_id, s.o_surname, s.o_name
@@ -1131,7 +1310,7 @@ def search_all_encouragements():
     return execute_query(query, fetch=True)
 
 
-def search_all_penalties():
+def search_all_penalties() -> list[sqlite3.Row]:
     query = """
     SELECT p.id, p.penalty_type AS kind, p.reason, p.date AS date_obj,
            s.id AS student_id, s.o_surname, s.o_name
@@ -1141,7 +1320,7 @@ def search_all_penalties():
     return execute_query(query, fetch=True)
 
 
-def search_all_session_results():
+def search_all_session_results() -> list[sqlite3.Row]:
     query = """
     SELECT sr.id, sr.subject, sr.type_exam, sr.grade, sr.date,
            s.id AS student_id, s.o_surname, s.o_name
@@ -1151,13 +1330,13 @@ def search_all_session_results():
     return execute_query(query, fetch=True)
 
 
-def search_all_achievements():
+def search_all_achievements() -> list[sqlite3.Row]:
     query = ("SELECT id, block, name, points, version, calc_type "
              "FROM achievements_catalog ORDER BY block, name")
     return execute_query(query, fetch=True)
 
 
-def search_all_reviews():
+def search_all_reviews() -> list[sqlite3.Row]:
     query = ("SELECT r.id, r.student_id, s.o_surname, s.o_name, s.o_lastname, "
              "s.o_group_name, r.achievement_id, a.name AS achievement_name, "
              "r.status, r.semester, r.final_points "
@@ -1168,9 +1347,21 @@ def search_all_reviews():
     return execute_query(query, fetch=True)
 
 
+def get_photo_references() -> list[tuple]:
+    """Пары (id курсанта, значение o_photo) для непустых ссылок на фото.
+
+    Используется диагностикой doctor.check_photos(): отдельно считать
+    base64-легаси и висячие ссылки на отсутствующие файлы.
+    """
+    rows = execute_query(
+        "SELECT id, o_photo FROM students "
+        "WHERE o_photo IS NOT NULL AND TRIM(o_photo) <> ''", fetch=True) or []
+    return [(r["id"], r["o_photo"]) for r in rows]
+
+
 # Добавление поощрения
-def add_encouragement(student_id, encouragement_type, reason, issued_by, date_obj, order_number,
-                      actor_role=None):
+def add_encouragement(student_id: int, encouragement_type: str, reason: str, issued_by: str,
+                      date_obj: str, order_number: str, actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="add_encouragement")
     query = """
@@ -1180,7 +1371,7 @@ def add_encouragement(student_id, encouragement_type, reason, issued_by, date_ob
     execute_query(query, (student_id, encouragement_type, reason, issued_by, date_obj, order_number))
 
 # Получение всех поощерений для студента
-def get_encouragements_by_student(student_id):
+def get_encouragements_by_student(student_id: int) -> list[sqlite3.Row]:
     query = """
     SELECT encouragement_type, reason, issued_by, date AS date_obj, order_number FROM encouragements
     WHERE student_id = ?
@@ -1188,8 +1379,9 @@ def get_encouragements_by_student(student_id):
     return execute_query(query, (student_id,), fetch=True)
 
 # Добавление взыскания
-def add_penalty(student_id, penalty_type, reason, date_reason, issued_by, date_obj, order_number,
-                actor_role=None):
+def add_penalty(student_id: int, penalty_type: str, reason: str, date_reason: str,
+                issued_by: str, date_obj: str, order_number: str,
+                actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="add_penalty")
     query = """
@@ -1199,14 +1391,14 @@ def add_penalty(student_id, penalty_type, reason, date_reason, issued_by, date_o
     execute_query(query, (student_id, penalty_type, reason, date_reason, issued_by, date_obj, order_number))
 
 # Получение всех взысканий для студента
-def get_penalties_by_student(student_id):
+def get_penalties_by_student(student_id: int) -> list[sqlite3.Row]:
     query = """
     SELECT penalty_type, reason, date_reason, issued_by, date AS date_obj, order_number FROM penalties
     WHERE student_id = ?
     """
     return execute_query(query, (student_id,), fetch=True)
 
-def search_students_by_name_part(name_part):
+def search_students_by_name_part(name_part: str) -> list[sqlite3.Row]:
     """Поиск курсантов по части ФИО.
 
     Регистронезависимый (LOWER_UNICODE — см. connect_to_db): раньше поиск
@@ -1222,7 +1414,7 @@ def search_students_by_name_part(name_part):
     part = f"%{(name_part or '').strip().lower()}%"
     return execute_query(query, (part, part, part), fetch=True)
 
-def get_subjects_by_name_part(name_part):
+def get_subjects_by_name_part(name_part: str) -> list[sqlite3.Row]:
     query = "SELECT id, subject_name FROM subjects WHERE subject_name LIKE ?"
     name_part = f"%{name_part}%"  # Добавляем % для поиска по части строки
     return execute_query(query, (name_part,), fetch=True)
@@ -1320,7 +1512,7 @@ MKR_TABLES_SQL = [
 ]
 
 
-def init_mkr_tables():
+def init_mkr_tables() -> None:
     """Создаёт таблицы Дорожной карты (идемпотентно)."""
     for sql in MKR_TABLES_SQL:
         execute_query(sql)
@@ -1346,12 +1538,13 @@ BLOCK_NAMES = {
 }
 
 
-def get_blocks():
+def get_blocks() -> list[tuple[int, str]]:
     return sorted(BLOCK_NAMES.items())
 
 
-def add_achievement(ach_id, block, name, points, version="", calc_type="ms",
-                    actor_role=None):
+def add_achievement(ach_id: str | int, block: int | str, name: str, points: int | str,
+                    version: str = "", calc_type: str = "ms",
+                    actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="add_achievement")
     execute_query(
@@ -1360,13 +1553,13 @@ def add_achievement(ach_id, block, name, points, version="", calc_type="ms",
         (str(ach_id), int(block), name, int(points), version, calc_type))
 
 
-def delete_achievement(ach_id, actor_role=None):
+def delete_achievement(ach_id: str | int, actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="delete_achievement")
     execute_query("DELETE FROM achievements_catalog WHERE id = ?", (str(ach_id),))
 
 
-def get_achievements(block=None, search=None):
+def get_achievements(block: int | None = None, search: str | None = None) -> list[sqlite3.Row]:
     query = ("SELECT id, block, name, points, version, calc_type "
              "FROM achievements_catalog WHERE 1=1")
     params = []
@@ -1380,12 +1573,12 @@ def get_achievements(block=None, search=None):
     return execute_query(query, tuple(params), fetch=True)
 
 
-def count_achievements():
+def count_achievements() -> int:
     rows = execute_query("SELECT COUNT(*) c FROM achievements_catalog", fetch=True)
     return rows[0]["c"] if rows else 0
 
 
-def import_achievements_from_csv(filepath, actor_role=None):
+def import_achievements_from_csv(filepath: str, actor_role: str | None = None) -> int:
     """Импорт справочника достижений из CSV (формат наследия MKR)."""
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="import_achievements_from_csv")
@@ -1412,9 +1605,10 @@ def import_achievements_from_csv(filepath, actor_role=None):
     return added
 
 
-def calculate_final_points(calc_type, base_points, k_ur=1.0, k_role=1.0,
-                           k_vn=1.0, k_st=1.0, duration_months=0,
-                           grant_amount=0, ip_bonus=0):
+def calculate_final_points(calc_type: str, base_points: int | None, k_ur: float = 1.0,
+                           k_role: float = 1.0, k_vn: float = 1.0, k_st: float = 1.0,
+                           duration_months: int | None = 0, grant_amount: int | None = 0,
+                           ip_bonus: int | None = 0) -> int:
     """Расчёт итоговых баллов по формуле из MKR (финансовые данные — T-3).
 
     Формула: base * k_ur * k_role * k_vn * k_st (+ бонус за ИПР); для
@@ -1439,7 +1633,7 @@ def calculate_final_points(calc_type, base_points, k_ur=1.0, k_role=1.0,
     return round(total + int(ip_bonus or 0))
 
 
-def count_pending_reviews():
+def count_pending_reviews() -> int:
     """Число заявок на экспертизу Road Map в статусе 'на рассмотрении'."""
     try:
         rows = execute_query(
@@ -1451,7 +1645,7 @@ def count_pending_reviews():
         return 0
 
 
-def get_recent_pending_reviews(limit=10):
+def get_recent_pending_reviews(limit: int = 10) -> list[sqlite3.Row]:
     """Последние новые заявки (для колокольчика уведомлений).
 
     Примечание: в CREATE TABLE roadmap_reviews колонки created_at нет —
@@ -1494,10 +1688,11 @@ def get_recent_pending_reviews(limit=10):
             return []
 
 
-def add_review(student_id, achievement_id, semester, status="pending",
-               confirmation_file="", comment=None, k_ur=1.0, k_role=1.0,
-               k_vn=1.0, k_st=1.0, duration_months=0, grant_amount=0, ip_bonus=0,
-               actor_role=None):
+def add_review(student_id: int, achievement_id: str, semester: int, status: str = "pending",
+               confirmation_file: str = "", comment: str | None = None, k_ur: float = 1.0,
+               k_role: float = 1.0, k_vn: float = 1.0, k_st: float = 1.0,
+               duration_months: int = 0, grant_amount: int = 0, ip_bonus: int = 0,
+               actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="add_review")
     ach = execute_query(
@@ -1520,7 +1715,8 @@ def add_review(student_id, achievement_id, semester, status="pending",
          duration_months, grant_amount, ip_bonus, now))
 
 
-def update_review(review_id, status, comment=None, final_points=None, actor_role=None):
+def update_review(review_id: int, status: str, comment: str | None = None,
+                  final_points: int | None = None, actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="update_review")
     execute_query(
@@ -1530,13 +1726,14 @@ def update_review(review_id, status, comment=None, final_points=None, actor_role
          final_points, review_id))
 
 
-def delete_review(review_id, actor_role=None):
+def delete_review(review_id: int, actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="delete_review")
     execute_query("DELETE FROM roadmap_reviews WHERE id = ?", (review_id,))
 
 
-def get_reviews(student_id=None, status=None, semester=None):
+def get_reviews(student_id: int | None = None, status: str | None = None,
+                semester: int | None = None) -> list[sqlite3.Row]:
     query = ("SELECT r.id, r.student_id, s.o_surname, s.o_name, s.o_lastname, "
              "s.o_group_name, r.achievement_id, a.name AS ach_name, a.block, "
              "a.points, r.status, r.semester, r.final_points, r.expert_comment, "
@@ -1560,7 +1757,7 @@ def get_reviews(student_id=None, status=None, semester=None):
     return execute_query(query, tuple(params), fetch=True)
 
 
-def get_student_total_points(student_id, semester=None):
+def get_student_total_points(student_id: int, semester: int | None = None) -> int:
     query = ("SELECT COALESCE(SUM(final_points), 0) t FROM roadmap_reviews "
              "WHERE status = 'approved' AND student_id = ?")
     params = [student_id]
@@ -1571,8 +1768,9 @@ def get_student_total_points(student_id, semester=None):
     return rows[0]["t"] if rows else 0
 
 
-def save_individual_plan(student_id, semester, plan_text, status="draft",
-                         approved_by=None, actor_role=None):
+def save_individual_plan(student_id: int, semester: int, plan_text: str,
+                         status: str = "draft", approved_by: str | None = None,
+                         actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="save_individual_plan")
     existing = execute_query(
@@ -1591,15 +1789,16 @@ def save_individual_plan(student_id, semester, plan_text, status="draft",
             (student_id, int(semester), plan_text, status, approved_by, now))
 
 
-def get_individual_plan(student_id, semester):
+def get_individual_plan(student_id: int, semester: int) -> sqlite3.Row | None:
     rows = execute_query(
         "SELECT * FROM individual_plans WHERE student_id = ? AND semester = ?",
         (student_id, int(semester)), fetch=True)
     return rows[0] if rows else None
 
 
-def set_semester_status(student_id, semester, is_candidate=None, is_resident=None,
-                        actor_role=None):
+def set_semester_status(student_id: int, semester: int, is_candidate: bool | None = None,
+                        is_resident: bool | None = None,
+                        actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="set_semester_status")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1621,15 +1820,15 @@ def set_semester_status(student_id, semester, is_candidate=None, is_resident=Non
         (student_id, int(semester), cand, res, applied, approved))
 
 
-def get_semester_status(student_id, semester):
+def get_semester_status(student_id: int, semester: int) -> sqlite3.Row | None:
     rows = execute_query(
         "SELECT * FROM student_semester_status WHERE student_id = ? AND semester = ?",
         (student_id, int(semester)), fetch=True)
     return rows[0] if rows else None
 
 
-def add_manual_score(student_id, semester, block, score, comment="",
-                     actor_role=None):
+def add_manual_score(student_id: int, semester: int, block: int, score: int,
+                     comment: str = "", actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="add_manual_score")
     execute_query(
@@ -1638,7 +1837,8 @@ def add_manual_score(student_id, semester, block, score, comment="",
         (student_id, int(semester), int(block), int(score), comment))
 
 
-def get_manual_scores(student_id=None, semester=None):
+def get_manual_scores(student_id: int | None = None,
+                      semester: int | None = None) -> list[sqlite3.Row]:
     query = ("SELECT m.*, s.o_surname, s.o_name, s.o_group_name "
              "FROM manual_scores m JOIN students s ON s.id = m.student_id "
              "WHERE 1=1")
@@ -1653,13 +1853,14 @@ def get_manual_scores(student_id=None, semester=None):
     return execute_query(query, tuple(params), fetch=True)
 
 
-def delete_manual_score(score_id, actor_role=None):
+def delete_manual_score(score_id: int, actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="delete_manual_score")
     execute_query("DELETE FROM manual_scores WHERE id = ?", (score_id,))
 
 
-def set_semester_average(student_id, semester, average_score, actor_role=None):
+def set_semester_average(student_id: int, semester: int, average_score: float,
+                         actor_role: str | None = None) -> None:
     # B-1: серверная проверка прав при мутациях (см. app/access.py)
     require_role(actor_role, action="set_semester_average")
     execute_query(
@@ -1670,7 +1871,7 @@ def set_semester_average(student_id, semester, average_score, actor_role=None):
         (student_id, int(semester), float(average_score)))
 
 
-def get_semester_average(student_id, semester):
+def get_semester_average(student_id: int, semester: int) -> float | None:
     rows = execute_query(
         "SELECT average_score FROM semester_averages "
         "WHERE student_id = ? AND semester = ?",
@@ -1678,7 +1879,7 @@ def get_semester_average(student_id, semester):
     return rows[0]["average_score"] if rows else None
 
 
-def get_roadmap_stats():
+def get_roadmap_stats() -> dict[str, Any]:
     """Сводка для дашборда: количество решений, топ студентов, разрез по блокам."""
     def scalar(query, params=()):
         rows = execute_query(query, params, fetch=True)

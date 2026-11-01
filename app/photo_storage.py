@@ -81,6 +81,36 @@ def migrate_legacy_base64() -> int:
     return migrated
 
 
+def legacy_base64_count() -> int:
+    """Сколько записей o_photo всё ещё хранят base64 (для doctor/тестов)."""
+    from database import execute_query
+
+    rows = execute_query("SELECT id, o_photo FROM students", fetch=True) or []
+    return sum(1 for r in rows
+               if looks_like_base64((r["o_photo"] if isinstance(r, dict) else r[1]) or ""))
+
+
+def vacuum_database() -> bool:
+    """Освобождает место файла БД после миграции base64-фото (BACKLOG C-3).
+
+    SQLite не возвращает освобождённые страницы файлу при UPDATE — файл
+    остаётся «раздутым» до VACUUM. Вызывать после подтверждённой миграции
+    migrate_legacy_base64(). Возвращает True, если VACUUM выполнен.
+    Перед вакуумом убеждаемся, что base64 не осталось: иначе удаление
+    строк было бы преждевременным (данные фото ещё не в файлах).
+    """
+    if legacy_base64_count() > 0:
+        return False  # миграция не завершена — рано освобождать место
+    from database import connect_to_db
+
+    conn = connect_to_db()
+    try:
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+    return True
+
+
 def delete_photo(filename: str) -> None:
     """Удалить файл фото из хранилища (при удалении курсанта).
 
@@ -147,3 +177,35 @@ def photo_src(value: str) -> str:
     if path and os.path.exists(path):
         return path
     return ""
+
+
+def main() -> int:
+    """Точка входа CLI миграции фото (BACKLOG C-3).
+
+    Использование::
+
+        python -m app.photo_storage             # только миграция base64→файлы
+        python -m app.photo_storage --vacuum    # + освобождение места в БД
+
+    VACUUM выполняется только если после миграции в базе не осталось
+    base64-значений (см. vacuum_database) — преждевременное сжатие опасно.
+    """
+    import sys
+
+    from database import init_db
+
+    init_db()
+    n = migrate_legacy_base64()
+    print(f"photo_storage: мигрировано записей base64→файл: {n}")
+    if "--vacuum" in sys.argv[1:]:
+        if vacuum_database():
+            print("photo_storage: VACUUM выполнен, файл БД сжат")
+        else:
+            print("photo_storage: VACUUM пропущен — остались base64-значения "
+                  "(повторите миграцию или проверьте битые данные)")
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

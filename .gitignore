@@ -1,11 +1,2 @@
 __pycache__/
-*.py[cod]
-.venv/
-venv/
-*.log
-.env
-.env.local
-
-# Данные приложения (БД, логи, фото курсантов, сгенерированные отчёты)
-data/
-!data/.gitkeep
+*.pyc

@@ -425,10 +425,16 @@ def delete_student(student_id: int, actor_role=None) -> bool:
                 log_except(f"delete_student: таблица {table}")
         cursor.execute("DELETE FROM students WHERE id = ?", (student_id,))
         conn.commit()
-        return cursor.rowcount > 0
+        ok = cursor.rowcount > 0
     finally:
         cursor.close()
         conn.close()
+    if ok:
+        # C-4: справочники групп/курсов больше не содержат удалённого курсанта
+        from cache import invalidate as _cache_invalidate
+
+        _cache_invalidate("students")
+    return ok
 
 
 # --- A-1: SQL из страниц в репозитории ------------------------------------
@@ -472,3 +478,34 @@ def search_students_like(**kwargs):
             query += f" AND {col} = ?"
             params.append(val)
     return execute_query(query, params=tuple(params), fetch=True)
+
+
+# ---------- Справочники фильтров UI (BACKLOG C-4: кэширование) ----------
+
+
+def all_group_names() -> list[str]:
+    """Все названия групп курсантов (справочник выпадающих списков).
+
+    Список меняется редко (при заведении/редактировании курсанта), а
+    читается на каждой перерисовке страницы — держим in-memory кэш с
+    инвалидацией по таблице students (database.add_student/update_student
+    вызывают cache.invalidate("students")).
+    """
+    from cache import cached
+    from database import list_groups
+
+    return cached(
+        "students:groups",
+        lambda: [str(r[0]) for r in (list_groups() or [])],
+        table="students")
+
+
+def all_courses() -> list[int]:
+    """Все курсы набора в порядке возрастания (справочник фильтров, C-4)."""
+    from cache import cached
+    from database import list_courses
+
+    return cached(
+        "students:courses",
+        lambda: [int(r[0]) for r in (list_courses() or [])],
+        table="students")
