@@ -28,12 +28,23 @@ def db(tmp_path, monkeypatch):
 
     # config.DB_PATH вычисляется при импорте — сбрасываем кэш модулей,
     # читающих конфигурацию, чтобы они увидели новый KANZLER_DB.
-    for mod in ("config", "database", "repositories"):
-        sys.modules.pop(mod, None)
+    _reset_mod_cache()
 
     import database
     database.init_db()  # схема Kanzler + MKR-таблицы (init_mkr_tables внутри)
     yield database
 
-    for mod in ("config", "database", "repositories"):
-        sys.modules.pop(mod, None)
+    _reset_mod_cache()
+
+
+def _reset_mod_cache():
+    """Удаляет из sys.modules все модули приложения, кэширующие конфиг/БД.
+
+    Страницы держат on-import ссылки на функции database.*, поэтому без их
+    сброса следующий тест получил бы устаревший DB_PATH (flaky-поведение).
+    """
+    stale = [m for m in list(sys.modules)
+             if m.split(".")[0] in {"config", "database", "repositories", "ui_kit"}
+             or m.startswith(("pages", "authz"))]
+    for m in stale:
+        sys.modules.pop(m, None)
