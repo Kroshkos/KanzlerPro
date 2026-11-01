@@ -7,12 +7,11 @@
 import os
 
 import flet as ft
-
 from config import REPORTS_DIR
-from database import (search_students_by_name_part, execute_query, log_action)
-from theme import (BG, PRIMARY, SUCCESS, DANGER, TEXT_DARK, TEXT_MUTED,
-                   card, section_title)
-from utils import session_get, show_snack, to_int
+from database import execute_query, log_action, search_students_by_name_part
+from theme import DANGER, PRIMARY, SUCCESS, TEXT_DARK, TEXT_MUTED, card, section_title
+from utils import session_get, to_int
+from utils_logger import log_except
 
 FORMS = [
     ("R1", "Р-1 · Индивидуальный отчёт курсанта", True),
@@ -45,12 +44,6 @@ class RoadmapReportsPage(ft.Column):
         self._refresh_files()
 
     # ---------------- форма параметров ----------------
-    def _student_suggest(self):
-        semesters = [r["semester"] for r in execute_query(
-            "SELECT DISTINCT semester FROM roadmap_reviews "
-            "WHERE semester IS NOT NULL ORDER BY semester", fetch=True)]
-        return semesters
-
     def _build_form(self):
         self.form_dd = ft.Dropdown(
             label="Форма", width=380, dense=True, value="R2",
@@ -62,7 +55,6 @@ class RoadmapReportsPage(ft.Column):
         self.group_tf = ft.TextField(
             label="Группа (пусто = все)", width=220, dense=True,
             border_radius=10)
-        sems = self._student_suggest()
         self.sem_dd = ft.Dropdown(
             label="Семестр", width=170, dense=True,
             options=[ft.dropdown.Option(key="", text="Все")] +
@@ -95,9 +87,14 @@ class RoadmapReportsPage(ft.Column):
 
     # ---------------- генерация ----------------
     def generate(self, e):
-        from report_generator import (generate_R1, generate_R2, generate_R3,
-                                       generate_R4, generate_R5,
-                                       REPORTLAB_AVAILABLE)
+        from report_generator import (
+            REPORTLAB_AVAILABLE,
+            generate_R1,
+            generate_R2,
+            generate_R3,
+            generate_R4,
+            generate_R5,
+        )
         fmt = self.fmt_dd.value or "xlsx"
         if fmt == "pdf" and not REPORTLAB_AVAILABLE:
             self.status_txt.value = "Для PDF установите: pip install reportlab"
@@ -141,7 +138,7 @@ class RoadmapReportsPage(ft.Column):
         try:
             self.update()
         except RuntimeError:
-            pass
+            log_except("roadmap_reports_page: блок на строке 143")
 
     def _find_student_id(self):
         name = (self.student_tf.value or "").strip()
@@ -183,7 +180,8 @@ class RoadmapReportsPage(ft.Column):
     def _open_file(self, path):
         """Открывает файл стандартной программой ОС (для десктоп-режима)."""
         try:
-            import subprocess, sys, platform
+            import subprocess
+            import sys
             if sys.platform == "win32":
                 os.startfile(path)  # type: ignore[attr-defined]
             elif sys.platform == "darwin":
@@ -191,4 +189,5 @@ class RoadmapReportsPage(ft.Column):
             else:
                 subprocess.Popen(["xdg-open", path])
         except Exception:
-            pass  # в web-режиме файл доступен в папке data/reports
+            # в web-режиме файл доступен в папке data/reports — не критично
+            log_except("roadmap_reports_page: открытие файла в ОС")

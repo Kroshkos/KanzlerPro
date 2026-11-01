@@ -6,20 +6,39 @@
 """
 
 import flet as ft
-
-from database import (get_reviews, add_review, update_review, delete_review,
-                      get_achievements, search_students_by_name_part,
-                      calculate_final_points, log_action, BLOCK_NAMES)
-from pages.registry import get_page
-from pages import shell
+from authz import is_admin, require_admin
+from database import (
+    BLOCK_NAMES,
+    add_review,
+    calculate_final_points,
+    delete_review,
+    get_achievements,
+    get_reviews,
+    log_action,
+    search_students_by_name_part,
+    update_review,
+)
 from theme import BG, TEXT_DARK, TEXT_MUTED, card, page_header, status_chip
-from utils import session_get, to_int, to_num, row_get
+from utils import row_get, session_get, to_int, to_num
+
+from pages import shell
 
 
 class RoadmapExpertPage(ft.Column):
     def __init__(self, page_obj, parent=None):
         super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page_obj
+
+        # --- Защита прав: экспертиза доступна только Администратору. ---
+        # Раньше страница не проверяла роль вообще: любой пользователь мог
+        # одобрять/отклонять заявки и начислять баллы Дорожной карты.
+        # Проверка дублируется в точках мутаций (см. _guard_write), потому
+        # что сессия может измениться после построения страницы (выход).
+        denied = require_admin(page_obj,
+                               "Экспертиза достижений доступна только администратору")
+        if denied is not None:
+            self.controls = [denied]
+            return
 
         # ---- выбор студента (по поиску ФИО, как в Канцлере) ----
         self.student_search = ft.TextField(label="Поиск курсанта (фамилия/имя)",
@@ -136,7 +155,22 @@ class RoadmapExpertPage(ft.Column):
             ip_bonus=int(self._f(self.ip_bonus, 0)))
         self.preview.value = f"Итог: {final} баллов"
 
+    def _guard_write(self):
+        """Повторная проверка роли в точках мутации.
+
+        Страница могла быть построена, пока пользователь был админом; после
+        выхода/смены сессии кнопки ещё живы в дереве UI — не даём писать.
+        """
+        if is_admin(self._page):
+            return True
+        from utils import show_snack
+        show_snack(self._page,
+                   "Недостаточно прав: экспертиза доступна только администратору")
+        return False
+
     def add_new_review(self, e):
+        if not self._guard_write():
+            return
         sid = self.student_dd.value
         aid = self.ach_dd.value
         if not sid or not aid:
@@ -157,9 +191,21 @@ class RoadmapExpertPage(ft.Column):
         self.refresh_table()
 
     def decide(self, review_id, status, final_points):
-        update_review(review_id, status, final_points=final_points)
-        log_action(session_get(self._page, "username"),
-                   f"Road Map: решение '{status}' по заявке №{review_id}")
+        if not self._guard_write():
+            return
+        if status == "deleted":
+            # Удаление записи — через delete_review (DELETE FROM).
+            # Раньше сюда вёл пункт «Удалить запись», но update_review с
+            # таким статусом лишь помечал строку и она навсегда исчезала
+            # из всех фильтров (get_reviews возвращает только известные
+            # статусы) — фактически это была тихая порча данных.
+            delete_review(review_id)
+            log_action(session_get(self._page, "username"),
+                       f"Road Map: удалена заявка №{review_id}")
+        else:
+            update_review(review_id, status, final_points=final_points)
+            log_action(session_get(self._page, "username"),
+                       f"Road Map: решение '{status}' по заявке №{review_id}")
         self.refresh_table()
 
     def refresh_table(self, e=None):
@@ -203,6 +249,8 @@ class RoadmapExpertPage(ft.Column):
     def approve(self, review_id, achievement_id, k_ur=1.0, k_role=1.0,
                 k_vn=1.0, k_st=1.0, duration_months=0, grant_amount=0,
                 ip_bonus=0):
+        if not self._guard_write():
+            return
         ach = next((a for a in get_achievements(search=achievement_id)
                     if a["id"] == achievement_id), None)
         pts = ach["points"] if ach else 0

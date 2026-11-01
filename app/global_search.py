@@ -13,9 +13,14 @@
 import re
 import sqlite3
 
-from database import (execute_query, get_students, search_all_achievements,
-                      search_all_encouragements, search_all_penalties,
-                      search_all_reviews, search_all_session_results)
+from database import (
+    get_students,
+    search_all_achievements,
+    search_all_encouragements,
+    search_all_penalties,
+    search_all_reviews,
+    search_all_session_results,
+)
 
 
 def _like(term):

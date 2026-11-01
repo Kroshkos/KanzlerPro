@@ -6,18 +6,25 @@
 """
 
 import flet as ft
-
-from database import (search_students_by_name_part, get_individual_plan,
-                      save_individual_plan, get_semester_status,
-                      set_semester_status, get_semester_average,
-                      set_semester_average, add_manual_score,
-                      get_manual_scores, delete_manual_score,
-                      get_student_total_points, BLOCK_NAMES, log_action)
-from pages.registry import get_page
-from pages import shell
+from database import (
+    BLOCK_NAMES,
+    add_manual_score,
+    delete_manual_score,
+    get_individual_plan,
+    get_manual_scores,
+    get_semester_average,
+    get_semester_status,
+    get_student_total_points,
+    log_action,
+    save_individual_plan,
+    search_students_by_name_part,
+    set_semester_average,
+    set_semester_status,
+)
 from theme import BG, PRIMARY, SUCCESS, TEXT_DARK, TEXT_MUTED, card, page_header
 from utils import session_get, show_snack, to_int, to_num
 
+from pages import shell
 
 IPR_STATUS_LABELS = {
     "draft": ("Черновик", "#64748b"),

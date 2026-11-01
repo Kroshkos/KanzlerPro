@@ -11,7 +11,7 @@
 import importlib
 
 from pages import registry
-from pages.registry import get_page, PAGE_MODULES
+from pages.registry import PAGE_MODULES, get_page
 
 _classes = {}
 for _mod_name in sorted(set(PAGE_MODULES.values())):

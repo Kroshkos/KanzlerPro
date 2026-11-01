@@ -1,20 +1,26 @@
-import flet as ft
-import pandas as pd
+import base64
+
 # tkinter используется только для диалога выбора пути сохранения файлов;
 # импорт выполняется лениво внутри методов, чтобы приложение запускалось
 # даже на системах без установленной среды X11/tkinter.
 import os
-import shutil
-import base64
-from openpyxl.utils import get_column_letter
-from datetime import datetime, timedelta
-from database import add_student, get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
+from datetime import datetime
+
+import flet as ft
+import photo_storage
+
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
-from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
-from pages.registry import get_page
+from constants import EDITABLE_STUDENT_FIELDS
+from database import (
+    get_students,
+    log_action,
+)
+from repositories import update_student_fields
+from utils import session_get, show_snack, to_int
+from utils_logger import log_except
+
 from pages import shell
-from utils import session_get, session_set, session_clear, show_snack, to_int, to_num
 
 
 class KadriWorkPage(ft.Column):
@@ -92,10 +98,25 @@ class AddStudentPage(ft.Column):
         super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
 
+        # --- Реестр текстовых полей формы (декомпозиция god-класса) ----------
+        # Поля объявляются в конце __init__ (_build_fields) через self._tf(),
+        # который создаёт ft.TextField, привязывает его к атрибуту и регистрирует
+        # имя в _field_names. Благодаря этому save_click собирает данные и
+        # очищает форму рефлексивно, без ручных словарей на ~100 строк.
+        self._field_names: list[str] = []
+
         self.back_button = ft.FilledButton("Назад", on_click=self.back_click)
         self.save_button = ft.FilledButton("Сохранить", on_click=self.save_click)
 
-        # Поле для загрузки фотографии
+        # --- Фотографии курсантов -------------------------------------------
+        # Загруженные фото хранятся в файловом хранилище DATA_DIR/photos
+        # (см. app/photo_storage.py), а в колонке students.o_photo лежит
+        # относительное имя файла. Раньше base64 писался прямо в БД — из-за
+        # этого база раздувалась и строились огромные Row-объекты.
+        # photo_base64 хранит ТЕКУЩЕЕ выбранное фото как data-URI (или None);
+        # save_click сохраняет его через photo_storage.save_photo() и пишет
+        # в student_data["o_photo"] имя файла.
+        self.photo_base64 = None
         self.photo_picker = ft.FilePicker(on_result=self.handle_photo_upload)
         # Файловый диалог живёт в overlay страницы; добавляем ровно один раз
         # (страница может пересоздаваться при навигации).
@@ -104,14 +125,27 @@ class AddStudentPage(ft.Column):
             if not any(isinstance(c, ft.FilePicker) for c in ov):
                 self._page.overlay.append(self.photo_picker)
         except Exception:
-            pass  # overlay недоступен (не-рантайм страница) — диалог не критичен
+            # overlay недоступен (не-рантайм страница) — диалог не критичен
+            log_except("kadri_page: добавление FilePicker в overlay")
 
-        self.photo_base64 = DEFAULT_PHOTO_BASE64  # Используем Base64 для изображения по умолчанию
+        self.photo_bytes: bytes | None = None  # байты выбранного фото (для сохранения на диске)
+        self.photo_ext: str = "jpg"
 
+        def _default_photo_src():
+            """Заглушка по умолчанию из assets/ как data-URI (файл бинарный,
+            не тащим ~1 МБ base64-литерал в код страницы)."""
+            try:
+                with open(os.path.join(os.path.dirname(photo_storage.__file__),
+                                       os.pardir, "assets", "default_photo.jpg"), "rb") as f:
+                    return "data:image/jpeg;base64," + base64.b64encode(f.read()).decode("ascii")
+            except OSError:
+                return ""
+
+        self._default_photo_src = _default_photo_src()
         self.photo_preview = ft.Image(
             # В Flet >= 0.80 параметр src_base64 удалён: base64 передаётся
-            # через src в формате data-URI.
-            src=f"data:image/jpeg;base64,{self.photo_base64}",
+            # через src в формате data-URI; файлы-фото — локальным путём.
+            src=self._default_photo_src,
             width=150,
             height=150,
             fit=ft.BoxFit.COVER,
@@ -126,11 +160,11 @@ class AddStudentPage(ft.Column):
             ),
         )
 
-        self.o_surname = ft.TextField(label="Фамилия", width=300)
-        self.o_name = ft.TextField(label="Имя", width=300)
-        self.o_lastname = ft.TextField(label="Отчество", width=300)
-        self.o_course = ft.TextField(label="Курс набора", width=300)
-        self.o_group_name = ft.TextField(label="Группа", width=300)
+        self._tf("o_surname", label="Фамилия", width=300)
+        self._tf("o_name", label="Имя", width=300)
+        self._tf("o_lastname", label="Отчество", width=300)
+        self._tf("o_course", label="Курс набора", width=300)
+        self._tf("o_group_name", label="Группа", width=300)
         self.o_gender = ft.Dropdown(
             label="Пол",
             options=[
@@ -138,24 +172,24 @@ class AddStudentPage(ft.Column):
                 ft.dropdown.Option("Женский")
             ]
         )
-        self.o_age = ft.TextField(label="Возраст", width=300)
-        self.o_date_of_birth = ft.TextField(label="Дата рождения", width=300)
-        self.o_place_of_birth = ft.TextField(label="Место рождения", width=910)
-        self.o_citizenship = ft.TextField(label="Гражданство", width=300)
-        self.o_nationality = ft.TextField(label="Национальность", width=300)
-        self.o_religion = ft.TextField(label="Вероисповедание", width=300)
-        self.o_marital_status = ft.TextField(label="Семейное положение", width=300)
-        self.kontact_residential_address = ft.TextField(label="Место жительства", width=910)
-        self.kontact_number = ft.TextField(label="Номер телефона", width=300)
-        self.kontact_email = ft.TextField(label="Электронная почта", width=300)
-        self.o_photo = ft.TextField(label="Фотография", width=300, visible=False)
-        self.o_occupation_before_military_service = ft.TextField(label="Деятельность до военной службы", width=300)
-        self.o_bad_habits = ft.TextField(label="Вредные привычки", width=300)
-        self.o_health_status = ft.TextField(label="Состояние здоровья", width=300)
-        self.o_sports_categories = ft.TextField(label="Виды спорта", width=300)
-        self.o_interests = ft.TextField(label="Интересы", width=300)
-        self.o_skills = ft.TextField(label="Навыки", width=300)
-        self.o_sociometric_indicators = ft.TextField(label="Социометрические показатели", width=300)
+        self._tf("o_age", label="Возраст", width=300)
+        self._tf("o_date_of_birth", label="Дата рождения", width=300)
+        self._tf("o_place_of_birth", label="Место рождения", width=910)
+        self._tf("o_citizenship", label="Гражданство", width=300)
+        self._tf("o_nationality", label="Национальность", width=300)
+        self._tf("o_religion", label="Вероисповедание", width=300)
+        self._tf("o_marital_status", label="Семейное положение", width=300)
+        self._tf("kontact_residential_address", label="Место жительства", width=910)
+        self._tf("kontact_number", label="Номер телефона", width=300)
+        self._tf("kontact_email", label="Электронная почта", width=300)
+        self._tf("o_photo", label="Фотография", width=300, visible=False)
+        self._tf("o_occupation_before_military_service", label="Деятельность до военной службы", width=300)
+        self._tf("o_bad_habits", label="Вредные привычки", width=300)
+        self._tf("o_health_status", label="Состояние здоровья", width=300)
+        self._tf("o_sports_categories", label="Виды спорта", width=300)
+        self._tf("o_interests", label="Интересы", width=300)
+        self._tf("o_skills", label="Навыки", width=300)
+        self._tf("o_sociometric_indicators", label="Социометрические показатели", width=300)
         
         o_info = ft.ExpansionTile(
             title=ft.Text("Общие данные"),
@@ -283,61 +317,61 @@ class AddStudentPage(ft.Column):
             ],
         )
 
-        self.ld_passport_series = ft.TextField(label="Серия", width= 300)
-        self.ld_pasport_number = ft.TextField(label="Номер", width= 300)
-        self.ld_pasport_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_pasport_unit_code_given = ft.TextField(label="Код подразделения", width= 300)
-        self.ld_pasport_place_given = ft.TextField(label="Кем выдан", width= 605)
-        self.ld_passport_children = ft.TextField(label="Количество детей", width= 300)
-        self.ld_vb_personal_number = ft.TextField(label="Личный номер", width= 300)
-        self.ld_vb_series = ft.TextField(label="Серия", width= 300)
-        self.ld_vb_number = ft.TextField(label="Номер", width= 300)
-        self.ld_vb_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_vb_place_given = ft.TextField(label="Кем выдан", width= 300)
-        self.ld_vb_vs_date_of_conscription = ft.TextField(label="Дата призыва", width= 300)
-        self.ld_vb_vs_called_upon = ft.TextField(label="Кем призван", width= 605)
-        self.ld_vb_post_post = ft.TextField(label="Должность по штату", width= 300)
-        self.ld_vb_post_assigned = ft.TextField(label="Кем назначен", width= 300)
-        self.ld_vb_post_date_assigned = ft.TextField(label="Дата назначения", width= 300)
-        self.ld_vb_post_number_order = ft.TextField(label="Номер приказа", width= 300)
-        self.ld_vb_rank_rank = ft.TextField(label="Звание", width= 300)
-        self.ld_vb_rank_assigned = ft.TextField(label="Кем присвоено", width= 300)
-        self.ld_vb_rank_date_assigned = ft.TextField(label="Дата присвоения", width= 300)
-        self.ld_vb_rank_number_order = ft.TextField(label="Номер приказа", width= 300)
-        self.ld_vb_fingerprinting_date = ft.TextField(label="Дата проведения дактилоскопии", width= 300)
-        self.ld_vb_fingerprinting_place = ft.TextField(label="Место проведения дактилоскопии", width= 605)
-        self.ld_vb_contract_number = ft.TextField(label="Какой по счету", width= 300)
-        self.ld_vb_contract_term = ft.TextField(label="Срок контракта", width= 300)
-        self.ld_vb_contract_date = ft.TextField(label="Дата заклячения", width= 300)
-        self.ld_vb_contract_number_order = ft.TextField(label="Номер приказа", width= 300)
-        self.ld_inn = ft.TextField(label="Номер ИНН", width= 300)
-        self.ld_snils = ft.TextField(label="Номер СНИЛС", width= 300)
-        self.ld_oms = ft.TextField(label="Номер ОМС", width= 300)
-        self.ld_education_tip = ft.TextField(label="Тип", width= 300)
-        self.ld_education_level = ft.TextField(label="Уровень образования", width= 300)
-        self.ld_education_series = ft.TextField(label="Серия", width= 300)
-        self.ld_education_number = ft.TextField(label="Номер", width= 300)
-        self.ld_education_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_education_name_given = ft.TextField(label="Образовательная организация", width= 910)
-        self.ld_education_city = ft.TextField(label="Город", width= 300)
-        self.ld_education_qualification = ft.TextField(label="Квалификация", width= 300)
-        self.ld_education_specialization = ft.TextField(label="Специальность", width= 300)
-        self.ld_education_form = ft.TextField(label="Форма обучения", width= 300)
-        self.ld_drl_series = ft.TextField(label="Серия", width= 300)
-        self.ld_drl_number = ft.TextField(label="Номер", width= 300)
-        self.ld_drl_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_drl_date_end = ft.TextField(label="Дата окончания действия", width= 300)
-        self.ld_drl_unit_code_given = ft.TextField(label="Код подразделения ГИБДД", width= 300)
-        self.ld_drl_category = ft.TextField(label="Категория ТС", width= 300)
-        self.ld_ccv_series = ft.TextField(label="Серия", width= 300)
-        self.ld_ccv_number = ft.TextField(label="Номер", width= 300)
-        self.ld_ccv_date_given = ft.TextField(label="Дата выдачи", width= 300)
-        self.ld_pvk_date_counted = ft.TextField(label="Дата съезда", width= 300)
-        self.ld_pvk_address = ft.TextField(label="Адрес проживания", width= 300)
-        self.ld_pvk_type_property = ft.TextField(label="Тип собственности", width= 300)
-        self.ld_pvk_additional_number = ft.TextField(label="Дополнительный номер телефона", width= 300)
-        self.ld_pvk_messenger_main = ft.TextField(label="Основной посыльный", width= 300)
-        self.ld_pvk_messenger_additional = ft.TextField(label="Запасной посыльный", width= 300)
+        self._tf("ld_passport_series", label="Серия", width= 300)
+        self._tf("ld_pasport_number", label="Номер", width= 300)
+        self._tf("ld_pasport_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_pasport_unit_code_given", label="Код подразделения", width= 300)
+        self._tf("ld_pasport_place_given", label="Кем выдан", width= 605)
+        self._tf("ld_passport_children", label="Количество детей", width= 300)
+        self._tf("ld_vb_personal_number", label="Личный номер", width= 300)
+        self._tf("ld_vb_series", label="Серия", width= 300)
+        self._tf("ld_vb_number", label="Номер", width= 300)
+        self._tf("ld_vb_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_vb_place_given", label="Кем выдан", width= 300)
+        self._tf("ld_vb_vs_date_of_conscription", label="Дата призыва", width= 300)
+        self._tf("ld_vb_vs_called_upon", label="Кем призван", width= 605)
+        self._tf("ld_vb_post_post", label="Должность по штату", width= 300)
+        self._tf("ld_vb_post_assigned", label="Кем назначен", width= 300)
+        self._tf("ld_vb_post_date_assigned", label="Дата назначения", width= 300)
+        self._tf("ld_vb_post_number_order", label="Номер приказа", width= 300)
+        self._tf("ld_vb_rank_rank", label="Звание", width= 300)
+        self._tf("ld_vb_rank_assigned", label="Кем присвоено", width= 300)
+        self._tf("ld_vb_rank_date_assigned", label="Дата присвоения", width= 300)
+        self._tf("ld_vb_rank_number_order", label="Номер приказа", width= 300)
+        self._tf("ld_vb_fingerprinting_date", label="Дата проведения дактилоскопии", width= 300)
+        self._tf("ld_vb_fingerprinting_place", label="Место проведения дактилоскопии", width= 605)
+        self._tf("ld_vb_contract_number", label="Какой по счету", width= 300)
+        self._tf("ld_vb_contract_term", label="Срок контракта", width= 300)
+        self._tf("ld_vb_contract_date", label="Дата заклячения", width= 300)
+        self._tf("ld_vb_contract_number_order", label="Номер приказа", width= 300)
+        self._tf("ld_inn", label="Номер ИНН", width= 300)
+        self._tf("ld_snils", label="Номер СНИЛС", width= 300)
+        self._tf("ld_oms", label="Номер ОМС", width= 300)
+        self._tf("ld_education_tip", label="Тип", width= 300)
+        self._tf("ld_education_level", label="Уровень образования", width= 300)
+        self._tf("ld_education_series", label="Серия", width= 300)
+        self._tf("ld_education_number", label="Номер", width= 300)
+        self._tf("ld_education_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_education_name_given", label="Образовательная организация", width= 910)
+        self._tf("ld_education_city", label="Город", width= 300)
+        self._tf("ld_education_qualification", label="Квалификация", width= 300)
+        self._tf("ld_education_specialization", label="Специальность", width= 300)
+        self._tf("ld_education_form", label="Форма обучения", width= 300)
+        self._tf("ld_drl_series", label="Серия", width= 300)
+        self._tf("ld_drl_number", label="Номер", width= 300)
+        self._tf("ld_drl_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_drl_date_end", label="Дата окончания действия", width= 300)
+        self._tf("ld_drl_unit_code_given", label="Код подразделения ГИБДД", width= 300)
+        self._tf("ld_drl_category", label="Категория ТС", width= 300)
+        self._tf("ld_ccv_series", label="Серия", width= 300)
+        self._tf("ld_ccv_number", label="Номер", width= 300)
+        self._tf("ld_ccv_date_given", label="Дата выдачи", width= 300)
+        self._tf("ld_pvk_date_counted", label="Дата съезда", width= 300)
+        self._tf("ld_pvk_address", label="Адрес проживания", width= 300)
+        self._tf("ld_pvk_type_property", label="Тип собственности", width= 300)
+        self._tf("ld_pvk_additional_number", label="Дополнительный номер телефона", width= 300)
+        self._tf("ld_pvk_messenger_main", label="Основной посыльный", width= 300)
+        self._tf("ld_pvk_messenger_additional", label="Запасной посыльный", width= 300)
 
 
         ld_info = ft.ExpansionTile(
@@ -683,35 +717,35 @@ class AddStudentPage(ft.Column):
         )
 
 
-        self.if_social_origin = ft.TextField(label="Социальное происхождение", width=300)
-        self.if_family_composition = ft.TextField(label="Состав семьи", width=300)
-        self.if_number_of_children = ft.TextField(label="Количество детей", width=300)
-        self.if_dysfunctional_relatives = ft.TextField(label="Неблагополучные родственники", width=300)
-        self.rd_father_surname = ft.TextField(label="Фамилия", width=300)
-        self.rd_father_name = ft.TextField(label="Имя", width=300)
-        self.rd_father_lastname = ft.TextField(label="Отчество", width=300)
-        self.rd_father_date_of_birth = ft.TextField(label="Дата рождения", width=300)
-        self.rd_father_place_of_birth = ft.TextField(label="Место рождения", width=300)
-        self.rd_father_citizenship = ft.TextField(label="Гражданство", width=300)
-        self.rd_father_passport_series = ft.TextField(label="Серия паспорта", width=300)
-        self.rd_father_passport_number = ft.TextField(label="Номер паспорта", width=300)
-        self.rd_father_passport_date_given = ft.TextField(label="Дата выдачи", width=300)
-        self.rd_father_passport_place_given = ft.TextField(label="Кем выдан", width=300) 
-        self.rd_father_passport_unit_code_given = ft.TextField(label="Код подразделения", width=300)
-        self.rd_father_number = ft.TextField(label="Телефон", width=300)
-        self.rd_mother_surname = ft.TextField(label="Фамилия", width=300)
-        self.rd_mother_name = ft.TextField(label="Имя", width=300)
-        self.rd_mother_lastname = ft.TextField(label="Отчество", width=300)
-        self.rd_mother_date_of_birth = ft.TextField(label="Дата рождения", width=300)
-        self.rd_mother_place_of_birth = ft.TextField(label="Место рождения", width=300)
-        self.rd_mother_citizenship = ft.TextField(label="Гражданство", width=300)
-        self.rd_mother_passport_series = ft.TextField(label="Серия паспорта", width=300)
-        self.rd_mother_passport_number = ft.TextField(label="Номер паспорта", width=300)
-        self.rd_mother_passport_date_given = ft.TextField(label="Дата выдачи", width=300)
-        self.rd_mother_passport_place_given = ft.TextField(label="Кем выдан", width=300) 
-        self.rd_mother_passport_unit_code_given = ft.TextField(label="Код подразделения", width=300)
-        self.rd_mother_number = ft.TextField(label="Телефон", width=300)
-        self.rd_other_info = ft.TextField(label="Другая информация", width=300)
+        self._tf("if_social_origin", label="Социальное происхождение", width=300)
+        self._tf("if_family_composition", label="Состав семьи", width=300)
+        self._tf("if_number_of_children", label="Количество детей", width=300)
+        self._tf("if_dysfunctional_relatives", label="Неблагополучные родственники", width=300)
+        self._tf("rd_father_surname", label="Фамилия", width=300)
+        self._tf("rd_father_name", label="Имя", width=300)
+        self._tf("rd_father_lastname", label="Отчество", width=300)
+        self._tf("rd_father_date_of_birth", label="Дата рождения", width=300)
+        self._tf("rd_father_place_of_birth", label="Место рождения", width=300)
+        self._tf("rd_father_citizenship", label="Гражданство", width=300)
+        self._tf("rd_father_passport_series", label="Серия паспорта", width=300)
+        self._tf("rd_father_passport_number", label="Номер паспорта", width=300)
+        self._tf("rd_father_passport_date_given", label="Дата выдачи", width=300)
+        self._tf("rd_father_passport_place_given", label="Кем выдан", width=300)
+        self._tf("rd_father_passport_unit_code_given", label="Код подразделения", width=300)
+        self._tf("rd_father_number", label="Телефон", width=300)
+        self._tf("rd_mother_surname", label="Фамилия", width=300)
+        self._tf("rd_mother_name", label="Имя", width=300)
+        self._tf("rd_mother_lastname", label="Отчество", width=300)
+        self._tf("rd_mother_date_of_birth", label="Дата рождения", width=300)
+        self._tf("rd_mother_place_of_birth", label="Место рождения", width=300)
+        self._tf("rd_mother_citizenship", label="Гражданство", width=300)
+        self._tf("rd_mother_passport_series", label="Серия паспорта", width=300)
+        self._tf("rd_mother_passport_number", label="Номер паспорта", width=300)
+        self._tf("rd_mother_passport_date_given", label="Дата выдачи", width=300)
+        self._tf("rd_mother_passport_place_given", label="Кем выдан", width=300)
+        self._tf("rd_mother_passport_unit_code_given", label="Код подразделения", width=300)
+        self._tf("rd_mother_number", label="Телефон", width=300)
+        self._tf("rd_other_info", label="Другая информация", width=300)
 
         family_info = ft.ExpansionTile(
             title=ft.Text("Информация о семье"),
@@ -886,13 +920,13 @@ class AddStudentPage(ft.Column):
             ],
         )
 
-        self.da_score_chemistry = ft.TextField(label="Химия", width=200)
-        self.da_score_biology = ft.TextField(label="Биология", width=200)
-        self.da_score_rusian = ft.TextField(label="Русский язык", width=200)
-        self.da_score_fp = ft.TextField(label="Физическая подготовка", width=200)
-        self.da_group_number = ft.TextField(label="Группа ПФО", width=200)
-        self.da_score_diploma = ft.TextField(label="Средний балл диплома", width=200)
-        self.da_additional_education = ft.TextField(label="Дополнительное образование", width=300)
+        self._tf("da_score_chemistry", label="Химия", width=200)
+        self._tf("da_score_biology", label="Биология", width=200)
+        self._tf("da_score_rusian", label="Русский язык", width=200)
+        self._tf("da_score_fp", label="Физическая подготовка", width=200)
+        self._tf("da_group_number", label="Группа ПФО", width=200)
+        self._tf("da_score_diploma", label="Средний балл диплома", width=200)
+        self._tf("da_additional_education", label="Дополнительное образование", width=300)
 
         da_info = ft.ExpansionTile(
             title=ft.Text("Данные при поступлении"),
@@ -966,281 +1000,156 @@ class AddStudentPage(ft.Column):
         ]
 
     # Обработчик загрузки фотографии
+    def _tf(self, name, **kwargs):
+        """Создать TextField, привязать к self.<name> и зарегистрировать в форме."""
+        field = ft.TextField(**kwargs)
+        setattr(self, name, field)
+        if name not in self._field_names:
+            self._field_names.append(name)
+        return field
+
+    # --- Нормализация имён полей ---------------------------------------------
+    # Исторически часть UI-полей объявлена с опечатками (ld_pasport_number и
+    # т.п.), а колонки БД называются иначе (ld_passport_number). Раньше это
+    # приводило к тихой потере данных: значения из таких полей в INSERT не
+    # попадали. Собираем данные формы через collect_form_data(), который
+    # отображает имена полей на реальные колонки students.
+    FIELD_ALIASES = {
+        "ld_pasport_number": "ld_passport_number",
+        "ld_pasport_date_given": "ld_passport_date_given",
+        "ld_pasport_unit_code_given": "ld_passport_unit_code_given",
+        "ld_pasport_place_given": "ld_passport_place_given",
+    }
+
+    # Даты формы добавления курсанта: поле → русская подпись для сообщения
+    # об ошибке формата. Ключи — уже нормализованные имена колонок БД.
+    DATE_FIELDS = {
+        "o_date_of_birth": "Дата рождения",
+        "ld_passport_date_given": "Дата выдачи паспорта",
+        "ld_vb_date_given": "Дата выдачи военного билета",
+        "ld_vb_vs_date_of_conscription": "Дата призыва",
+        "ld_vb_post_date_assigned": "Дата назначения должности",
+        "ld_vb_rank_date_assigned": "Дата присвоения звания",
+        "ld_vb_fingerprinting_date": "Дата дактилоскопии",
+        "ld_vb_contract_date": "Дата контракта",
+        "ld_education_date_given": "Дата выдачи документа об образовании",
+        "ld_drl_date_given": "Дата выдачи водительского удостоверения",
+        "ld_drl_date_end": "Дата окончания действия ВУ",
+        "ld_ccv_date_given": "Дата выдачи КЦВ",
+        "ld_pvk_date_counted": "Дата учёта в ПВК",
+        "rd_father_date_of_birth": "Дата рождения отца",
+        "rd_father_passport_date_given": "Дата выдачи паспорта отца",
+        "rd_mother_date_of_birth": "Дата рождения матери",
+        "rd_mother_passport_date_given": "Дата выдачи паспорта матери",
+    }
+
+    def collect_form_data(self):
+        """Собрать {колонка students: значение} по зарегистрированным полям.
+
+        Имена с историческими опечатками нормализуются FIELD_ALIASES;
+        da_summary_score рассчитывается вызывающей стороной после валидации.
+        """
+        from database import STUDENT_FIELDS
+        data = {}
+        for name in self._field_names:
+            col = self.FIELD_ALIASES.get(name, name)
+            if col in STUDENT_FIELDS:
+                data[col] = getattr(self, name).value
+        return data
+
+    def reset_form(self):
+        """Очистить все зарегистрированные поля формы и превью фото."""
+        for name in self._field_names:
+            getattr(self, name).value = ""
+        self.o_gender.value = ""
+        self.photo_bytes = None
+        self.photo_ext = "jpg"
+        self.photo_preview.src = self._default_photo_src
+
     def handle_photo_upload(self, e):
         # В Flet >= 0.80 pick_files() возвращает list[FilePickerFile] напрямую,
         # а older API присылал объект FilePickerResultEvent с полем .files.
         files = getattr(e, "files", e) or []
-        if files:
-            # Получаем путь к выбранному файлу
-            file_path = files[0].path
+        if not files:
+            return
+        file_path = files[0].path
+        # Байты храним как есть: при сохранении записи они лягут в файловое
+        # хранилище (photo_storage), в БД пойдёт только имя файла.
+        with open(file_path, "rb") as image_file:
+            self.photo_bytes = image_file.read()
+        ext = os.path.splitext(file_path)[1].lstrip(".").lower() or "jpg"
+        self.photo_ext = ext if ext in photo_storage.ALLOWED_EXTENSIONS else "jpg"
 
-            # Читаем файл и кодируем его в Base64
-            with open(file_path, "rb") as image_file:
-                self.photo_base64 = base64.b64encode(image_file.read()).decode("utf-8")
-
-            # Обновляем превью фотографии
-            self.photo_preview.src = f"data:image/jpeg;base64,{self.photo_base64}"
-            self._page.update()
+        # Обновляем превью фотографии (data-URI — самый переносимый способ
+        # показать ещё не сохранённое изображение).
+        b64 = base64.b64encode(self.photo_bytes).decode("utf-8")
+        mime = "image/png" if self.photo_ext == "png" else "image/jpeg"
+        self.photo_preview.src = f"data:{mime};base64,{b64}"
+        self._page.update()
 
     def save_click(self, e):
-        self.da_summary_score = f"{(to_int(self.da_score_chemistry.value, 0) + to_int(self.da_score_biology.value, 0) + to_int(self.da_score_rusian.value, 0) + to_int(self.da_score_fp.value, 0))}"
-        def format_date(date_str):
-            if not date_str:  # Если дата не указана, возвращаем None
+        # --- 1. Валидация (до изменения состояния) ---------------------------
+        try:
+            data = self._validated_form_data()
+        except ValueError as ex:
+            show_snack(self._page, ft.Text(f"Ошибка: {ex}"))
+            self._page.update()
+            return
+
+        # --- 2. Агрегированный балл -----------------------------------------
+        data["da_summary_score"] = str(
+            to_int(self.da_score_chemistry.value, 0)
+            + to_int(self.da_score_biology.value, 0)
+            + to_int(self.da_score_rusian.value, 0)
+            + to_int(self.da_score_fp.value, 0))
+
+        # --- 3. Запись в БД + фотохранилище ----------------------------------
+        try:
+            student_id = repo.add_student(data)
+            if self.photo_bytes:
+                # Фото — файл в DATA_DIR/photos; в БД только имя файла.
+                filename = photo_storage.save_photo(
+                    self.photo_bytes, student_id, self.photo_ext)
+                repo.update_student_fields(student_id, {"o_photo": filename})
+        except Exception as ex:
+            show_snack(self._page, ft.Text(f"Ошибка: {ex}"))
+            self._page.update()
+            return
+
+        # --- 4. Сброс формы ---------------------------------------------------
+        self.reset_form()
+        show_snack(self._page, ft.Text("Курсант успешно добавлен"))
+        self._page.update()
+        log_action(session_get(self._page, "username"),
+                   f"Добавлен студент: {data['o_surname']} {data['o_name']} {data['o_lastname']}")
+
+    def _validated_form_data(self) -> dict:
+        """Собрать данные формы в плоский dict по колонкам students.
+
+        * Даты «ДД.ММ.ГГГГ» конвертируются в ISO; битая дата — ValueError с
+          понятным сообщением (раньше ошибка молча портила запись).
+        * Имена UI-полей с историческими опечатками (ld_pasport_number и
+          т.п.) нормализуются к реальным колонкам БД через FIELD_ALIASES.
+        * da_summary_score считается в save_click ПОСЛЕ валидации.
+        """
+        def format_date(date_str, label=""):
+            if not date_str:
                 return None
             try:
                 return datetime.strptime(date_str, "%d.%m.%Y").strftime("%Y-%m-%d")
             except ValueError:
-                raise ValueError(f"Некорректный формат даты: {date_str}. Используйте ДД.ММ.ГГГГ")
-        
-        try:
-            # Собираем данные из всех полей
-            student_data = {
-                "o_surname": self.o_surname.value,
-                "o_name": self.o_name.value,
-                "o_lastname": self.o_lastname.value,
-                "o_course": self.o_course.value,
-                "o_group_name": self.o_group_name.value,
-                "o_gender": self.o_gender.value,
-                "o_age": self.o_age.value,
-                "o_date_of_birth": format_date(self.o_date_of_birth.value),
-                "o_place_of_birth": self.o_place_of_birth.value,
-                "o_citizenship": self.o_citizenship.value,
-                "o_nationality": self.o_nationality.value,
-                "o_religion": self.o_religion.value,
-                "o_marital_status": self.o_marital_status.value,
-                "o_occupation_before_military_service": self.o_occupation_before_military_service.value,
-                "o_bad_habits": self.o_bad_habits.value,
-                "o_health_status": self.o_health_status.value,
-                "o_sports_categories": self.o_sports_categories.value,
-                "o_interests": self.o_interests.value,
-                "o_skills": self.o_skills.value,
-                "o_sociometric_indicators": self.o_sociometric_indicators.value,
-                "kontact_residential_address": self.kontact_residential_address.value,
-                "kontact_number": self.kontact_number.value,
-                "kontact_email": self.kontact_email.value,
-                "o_photo": self.photo_base64,
-                "ld_passport_series": self.ld_passport_series.value,
-                "ld_passport_number": self.ld_pasport_number.value,
-                "ld_passport_date_given": format_date(self.ld_pasport_date_given.value),
-                "ld_passport_unit_code_given": self.ld_pasport_unit_code_given.value,
-                "ld_passport_place_given": self.ld_pasport_place_given.value,
-                "ld_passport_children": self.ld_passport_children.value,
-                "ld_vb_personal_number": self.ld_vb_personal_number.value,
-                "ld_vb_series": self.ld_vb_series.value,
-                "ld_vb_number": self.ld_vb_number.value,
-                "ld_vb_date_given": format_date(self.ld_vb_date_given.value),
-                "ld_vb_place_given": self.ld_vb_place_given.value,
-                "ld_vb_vs_date_of_conscription": format_date(self.ld_vb_vs_date_of_conscription.value),
-                "ld_vb_vs_called_upon": self.ld_vb_vs_called_upon.value,
-                "ld_vb_post_post": self.ld_vb_post_post.value,
-                "ld_vb_post_assigned": self.ld_vb_post_assigned.value,
-                "ld_vb_post_date_assigned": format_date(self.ld_vb_post_date_assigned.value),
-                "ld_vb_post_number_order": self.ld_vb_post_number_order.value,
-                "ld_vb_rank_rank": self.ld_vb_rank_rank.value,
-                "ld_vb_rank_assigned": self.ld_vb_rank_assigned.value,
-                "ld_vb_rank_date_assigned": format_date(self.ld_vb_rank_date_assigned.value),
-                "ld_vb_rank_number_order": self.ld_vb_rank_number_order.value,
-                "ld_vb_fingerprinting_date": format_date(self.ld_vb_fingerprinting_date.value),
-                "ld_vb_fingerprinting_place": self.ld_vb_fingerprinting_place.value,
-                "ld_vb_contract_number": self.ld_vb_contract_number.value,
-                "ld_vb_contract_term": self.ld_vb_contract_term.value,
-                "ld_vb_contract_date": format_date(self.ld_vb_contract_date.value),
-                "ld_vb_contract_number_order": self.ld_vb_contract_number_order.value,
-                "ld_inn": self.ld_inn.value,
-                "ld_snils": self.ld_snils.value,
-                "ld_oms": self.ld_oms.value,
-                "ld_education_tip": self.ld_education_tip.value,
-                "ld_education_level": self.ld_education_level.value,
-                "ld_education_series": self.ld_education_series.value,
-                "ld_education_number": self.ld_education_number.value,
-                "ld_education_date_given": format_date(self.ld_education_date_given.value),
-                "ld_education_name_given": self.ld_education_name_given.value,
-                "ld_education_city": self.ld_education_city.value,
-                "ld_education_qualification": self.ld_education_qualification.value,
-                "ld_education_specialization": self.ld_education_specialization.value,
-                "ld_education_form": self.ld_education_form.value,
-                "ld_drl_series": self.ld_drl_series.value,
-                "ld_drl_number": self.ld_drl_number.value,
-                "ld_drl_date_given": format_date(self.ld_drl_date_given.value),
-                "ld_drl_date_end": format_date(self.ld_drl_date_end.value),
-                "ld_drl_unit_code_given": self.ld_drl_unit_code_given.value,
-                "ld_drl_category": self.ld_drl_category.value,
-                "ld_ccv_series": self.ld_ccv_series.value,
-                "ld_ccv_number": self.ld_ccv_number.value,
-                "ld_ccv_date_given": format_date(self.ld_ccv_date_given.value),
-                "ld_pvk_date_counted": format_date(self.ld_pvk_date_counted.value),
-                "ld_pvk_address": self.ld_pvk_address.value,
-                "ld_pvk_type_property": self.ld_pvk_type_property.value,
-                "ld_pvk_additional_number": self.ld_pvk_additional_number.value,
-                "ld_pvk_messenger_main": self.ld_pvk_messenger_main.value,
-                "ld_pvk_messenger_additional": self.ld_pvk_messenger_additional.value,
-                "if_social_origin": self.if_social_origin.value,
-                "if_family_composition": self.if_family_composition.value,
-                "if_number_of_children": self.if_number_of_children.value,
-                "if_dysfunctional_relatives": self.if_dysfunctional_relatives.value,
-                "da_score_chemistry": self.da_score_chemistry.value,
-                "da_score_biology": self.da_score_biology.value,
-                "da_score_rusian": self.da_score_rusian.value,
-                "da_score_fp": self.da_score_fp.value,
-                "da_summary_score": f"{(to_int(self.da_score_chemistry.value, 0) + to_int(self.da_score_biology.value, 0) + to_int(self.da_score_rusian.value, 0) + to_int(self.da_score_fp.value, 0))}",
-                "da_group_number": self.da_group_number.value,
-                "da_score_diploma": self.da_score_diploma.value,
-                "da_additional_education": self.da_additional_education.value,
-                "rd_father_surname": self.rd_father_surname.value,
-                "rd_father_name": self.rd_father_name.value,
-                "rd_father_lastname": self.rd_father_lastname.value,
-                "rd_father_date_of_birth": format_date(self.rd_father_date_of_birth.value),
-                "rd_father_place_of_birth": self.rd_father_place_of_birth.value,
-                "rd_father_citizenship": self.rd_father_citizenship.value,
-                "rd_father_passport_series": self.rd_father_passport_series.value,
-                "rd_father_passport_number": self.rd_father_passport_number.value,
-                "rd_father_passport_date_given": format_date(self.rd_father_passport_date_given.value),
-                "rd_father_passport_place_given": self.rd_father_passport_place_given.value,
-                "rd_father_passport_unit_code_given": self.rd_father_passport_unit_code_given.value,
-                "rd_father_number": self.rd_father_number.value,
-                "rd_mother_surname": self.rd_mother_surname.value,
-                "rd_mother_name": self.rd_mother_name.value,
-                "rd_mother_lastname": self.rd_mother_lastname.value,
-                "rd_mother_date_of_birth": format_date(self.rd_mother_date_of_birth.value),
-                "rd_mother_place_of_birth": self.rd_mother_place_of_birth.value,
-                "rd_mother_citizenship": self.rd_mother_citizenship.value,
-                "rd_mother_passport_series": self.rd_mother_passport_series.value,
-                "rd_mother_passport_number": self.rd_mother_passport_number.value,
-                "rd_mother_passport_date_given": format_date(self.rd_mother_passport_date_given.value),
-                "rd_mother_passport_place_given": self.rd_mother_passport_place_given.value,
-                "rd_mother_passport_unit_code_given": self.rd_mother_passport_unit_code_given.value,
-                "rd_mother_number": self.rd_mother_number.value,
-                "rd_other_info": self.rd_other_info.value,
-            }
+                raise ValueError(
+                    f"Некорректный формат даты в поле «{label or date_str}»: "
+                    f"{date_str}. Используйте ДД.ММ.ГГГГ")
 
-            add_student(student_data)
-            
-
-            # Очищаем поля ввода
-            self.o_surname.value = ""
-            self.o_name.value = ""
-            self.o_lastname.value = ""
-            self.o_course.value = ""
-            self.o_group_name.value = ""
-            self.o_gender.value = ""
-            self.o_age.value = ""
-            self.o_date_of_birth.value = ""
-            self.o_place_of_birth.value = ""
-            self.o_citizenship.value = ""
-            self.o_nationality.value = ""
-            self.o_religion.value = ""
-            self.o_marital_status.value = ""
-            self.o_occupation_before_military_service.value = ""
-            self.o_bad_habits.value = ""
-            self.o_health_status.value = ""
-            self.o_sports_categories.value = ""
-            self.o_interests.value = ""
-            self.o_skills.value = ""
-            self.o_sociometric_indicators.value = ""
-            self.kontact_residential_address.value = ""
-            self.kontact_number.value = ""
-            self.kontact_email.value = ""
-            self.photo_preview.src = f"data:image/jpeg;base64,{DEFAULT_PHOTO_BASE64}"
-            self.photo_base64 = DEFAULT_PHOTO_BASE64
-            self.ld_passport_series.value = ""
-            self.ld_pasport_number.value = ""
-            self.ld_pasport_date_given.value = ""
-            self.ld_pasport_unit_code_given.value = ""
-            self.ld_pasport_place_given.value = ""
-            self.ld_passport_children.value = ""
-            self.ld_vb_personal_number.value = ""
-            self.ld_vb_series.value = ""
-            self.ld_vb_number.value = ""
-            self.ld_vb_date_given.value = ""
-            self.ld_vb_place_given.value = ""
-            self.ld_vb_vs_date_of_conscription.value = ""
-            self.ld_vb_vs_called_upon.value = ""
-            self.ld_vb_post_post.value = ""
-            self.ld_vb_post_assigned.value = ""
-            self.ld_vb_post_date_assigned.value = ""
-            self.ld_vb_post_number_order.value = ""
-            self.ld_vb_rank_rank.value = ""
-            self.ld_vb_rank_assigned.value = ""
-            self.ld_vb_rank_date_assigned.value = ""
-            self.ld_vb_rank_number_order.value = ""
-            self.ld_vb_fingerprinting_date.value = ""
-            self.ld_vb_fingerprinting_place.value = ""
-            self.ld_vb_contract_number.value = ""
-            self.ld_vb_contract_term.value = ""
-            self.ld_vb_contract_date.value = ""
-            self.ld_vb_contract_number_order.value = ""
-            self.ld_inn.value = ""
-            self.ld_snils.value = ""
-            self.ld_oms.value = ""
-            self.ld_education_tip.value = ""
-            self.ld_education_level.value = ""
-            self.ld_education_series.value = ""
-            self.ld_education_number.value = ""
-            self.ld_education_date_given.value = ""
-            self.ld_education_name_given.value = ""
-            self.ld_education_city.value = ""
-            self.ld_education_qualification.value = ""
-            self.ld_education_specialization.value = ""
-            self.ld_education_form.value = ""
-            self.ld_drl_series.value = ""
-            self.ld_drl_number.value = ""
-            self.ld_drl_date_given.value = ""
-            self.ld_drl_date_end.value = ""
-            self.ld_drl_unit_code_given.value = ""
-            self.ld_drl_category.value = ""
-            self.ld_ccv_series.value = ""
-            self.ld_ccv_number.value = ""
-            self.ld_ccv_date_given.value = ""
-            self.ld_pvk_date_counted.value = ""
-            self.ld_pvk_address.value = ""
-            self.ld_pvk_type_property.value = ""
-            self.ld_pvk_additional_number.value = ""
-            self.ld_pvk_messenger_main.value = ""
-            self.ld_pvk_messenger_additional.value = ""
-            self.if_social_origin.value = ""
-            self.if_family_composition.value = ""
-            self.if_number_of_children.value = ""
-            self.if_dysfunctional_relatives.value = ""
-            self.da_score_chemistry.value = ""
-            self.da_score_biology.value = ""
-            self.da_score_rusian.value = ""
-            self.da_score_fp.value = ""
-            self.da_group_number.value = ""
-            self.da_score_diploma.value = ""
-            self.da_additional_education.value = ""
-            self.rd_father_surname.value = ""
-            self.rd_father_name.value = ""
-            self.rd_father_lastname.value = ""
-            self.rd_father_date_of_birth.value = ""
-            self.rd_father_place_of_birth.value = ""
-            self.rd_father_citizenship.value = ""
-            self.rd_father_passport_series.value = ""
-            self.rd_father_passport_number.value = ""
-            self.rd_father_passport_date_given.value = ""
-            self.rd_father_passport_place_given.value = ""
-            self.rd_father_passport_unit_code_given.value = ""
-            self.rd_father_number.value = ""
-            self.rd_mother_surname.value = ""
-            self.rd_mother_name.value = ""
-            self.rd_mother_lastname.value = ""
-            self.rd_mother_date_of_birth.value = ""
-            self.rd_mother_place_of_birth.value = ""
-            self.rd_mother_citizenship.value = ""
-            self.rd_mother_passport_series.value = ""
-            self.rd_mother_passport_number.value = ""
-            self.rd_mother_passport_date_given.value = ""
-            self.rd_mother_passport_place_given.value = ""
-            self.rd_mother_passport_unit_code_given.value = ""
-            self.rd_mother_number.value = ""
-            self.rd_other_info.value = ""
-
-            # Показываем сообщение успешного созранения
-            show_snack(self._page, ft.Text("Курсант успешно добавлен"))
-            self._page.update()
-            log_action(session_get(self._page, "username"), f"Добавлен студент: {student_data['o_surname']} {student_data['o_name']} {student_data['o_lastname']}")
-        except Exception as ex:
-            show_snack(self._page, ft.Text(f"Ошибка: {ex}"))
-            self._page.update()
+        raw = self.collect_form_data()
+        for fname, label in self.DATE_FIELDS.items():
+            if fname in raw:
+                raw[fname] = format_date(raw[fname], label)
+        # Фото пока не сохранено на диск: в БД пойдёт пустое значение,
+        # имя файла подставит save_click после получения student_id.
+        raw["o_photo"] = ""
+        return raw
 
     # Обработчик нажатия кнопки "Назад"
     def back_click(self, e):
@@ -1423,8 +1332,9 @@ class EditStudentPage(ft.Column):
                     val = format_date(val)
                 updates[fname] = val
             # fields уже отфильтрован по схеме (см. save()), на всякий случай
-            # оставляем только реально существующие колонки:
-            existing = set(student.keys())
+            # оставляем только реально существующие колонки. get_student_columns()
+            # возвращает список имён колонок таблицы students (белый список).
+            existing = set(repo.get_student_columns())
             updates = {k: v for k, v in updates.items() if k in existing}
 
             ok = update_student_fields(self.student_id, updates)

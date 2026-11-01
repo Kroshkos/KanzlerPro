@@ -1,6 +1,11 @@
 __pycache__/
-*.pyc
-data/*.db
+*.py[cod]
 .venv/
 venv/
-data/reports/
+*.log
+.env
+.env.local
+
+# Данные приложения (БД, логи, фото курсантов, сгенерированные отчёты)
+data/
+!data/.gitkeep

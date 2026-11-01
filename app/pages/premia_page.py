@@ -1,20 +1,22 @@
-import flet as ft
-import pandas as pd
+
 # tkinter используется только для диалога выбора пути сохранения файлов;
 # импорт выполняется лениво внутри методов, чтобы приложение запускалось
 # даже на системах без установленной среды X11/tkinter.
-import os
-import shutil
-import base64
-from openpyxl.utils import get_column_letter
-from datetime import datetime, timedelta
-from database import add_student, get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
+from datetime import datetime
+
+import flet as ft
+import pandas as pd
+
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
-from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
-from pages.registry import get_page
+from database import (
+    log_action,
+)
+from openpyxl.utils import get_column_letter
+from utils import session_get, show_snack
+from utils_logger import log_except
+
 from pages import shell
-from utils import session_get, session_set, session_clear, show_snack
 
 
 class PremiaWorkPage(ft.Column):
@@ -105,6 +107,15 @@ class PremiaWorkPage(ft.Column):
         # Получаем список курсантов выбранного курса
         students = repo.list_students_by_course(course)
 
+        # Пакетные выборки вместо N+1: 5 запросов на весь курс вместо
+        # 4-5 запросов на каждого курсанта (см. repositories.map_*).
+        ids = [s[0] for s in students]
+        positions_map = repo.map_last_positions(ids)
+        ranks_map = repo.map_last_ranks(ids)
+        penalties_map = repo.map_penalties_in_period(ids, start_date, end_date)
+        failed_ids = repo.map_failed_subjects(ids)
+        session_map = repo.map_latest_session_results(ids, semester)
+
         # Очищаем таблицу и добавляем результаты
         self.results_table.rows = []
         for i, student in enumerate(students):
@@ -113,11 +124,13 @@ class PremiaWorkPage(ft.Column):
             personal_number = student[4]
             post = student[5]
 
-            # Получаем последнюю должность из таблицы position_history
-            last_position = repo.get_last_position_row(student_id)
-
-            # Получаем последнее звание из таблицы rank_history
-            last_rank = repo.get_last_rank(student_id)
+            # Последняя должность/звание из пакетных словарей
+            # (кортеж (position, date, order_number) совместим со старым
+            # форматом get_last_position_row)
+            last_position = positions_map.get(student_id)
+            # '' вместо None: ft.Text(None) в Flet 1.x падает (как и в
+            # старой версии с get_last_rank -> None)
+            last_rank = ranks_map.get(student_id, "") or ""
 
             if last_position and last_position[0] == "Заместитель командира взвода":
                 formated_post = "заместителя командира взвода"
@@ -130,23 +143,23 @@ class PremiaWorkPage(ft.Column):
             else:
                 formated_post = None
 
-            # Получаем взыскания для курсанта за выбранный период
-            penalties = repo.list_penalties_in_period(student_id, start_date, end_date)
+            # Получаем взыскания курсанта за выбранный период (из пакета)
+            penalties = penalties_map.get(student_id, [])
 
             # Формируем текст с выговорами
             penalty_text = ", ".join([f"{p[0]} от {p[1]} (от {datetime.strptime(p[2], '%Y-%m-%d').strftime('%d.%m.%Y')})" for p in penalties]) if penalties else "Нет"
 
             # Проверяем, есть ли хотя бы один предмет, по которому последняя оценка отсутствует (не допущен или отсутствовал) или равна 2
-            # Проверяем по всем семестрам
-            has_failed = repo.has_failed_subjects(student_id)
+            # Проверяем по всем семестрам (батч map_failed_subjects)
+            has_failed = student_id in failed_ids
 
             # Если есть хотя бы один предмет без оценки или с оценкой 2, премия равна 1
             if has_failed:
                 premia_size = 1
                 premia_reason = "Не допущен, отсутствовал или оценка 2 по одному из предметов"
             else:
-                # Получаем результаты сессии для выбранного семестра, учитывая только последнюю оценку по каждому предмету
-                session_results = repo.list_latest_session_results(student_id, semester)
+                # Результаты сессии за выбранный семестр из пакетной карты
+                session_results = session_map.get(student_id, [])
 
                 # Если есть результаты, берем минимальную оценку из последних оценок
                 if session_results:
@@ -208,11 +221,15 @@ class PremiaWorkPage(ft.Column):
                     ]
                 )
             )
-            log_action(session_get(self._page, "username"), f"Созадана премия для курса {course} за семестр {semester} и период {start_date} - {end_date}")
+        # Одна запись в журнал на весь расчёт (раньше log_action вызывался
+        # внутри цикла — по строке лога на каждого курсанта).
+        log_action(session_get(self._page, "username"),
+                   f"Рассчитаны премии для курса {course} за семестр {semester} "
+                   f"и период {start_date} - {end_date} ({len(students)} чел.)")
         self._page.update()
 
     def export_to_excel(self, e):
-        from tkinter import filedialog, Tk
+        from tkinter import Tk, filedialog
         # Собираем данные из таблицы
         data = []
         for row in self.results_table.rows:
@@ -246,10 +263,9 @@ class PremiaWorkPage(ft.Column):
                     column_letter = get_column_letter(column[0].column)  # Получаем букву столбца
                     for cell in column:
                         try:
-                            if len(str(cell.value)) > max_length:
-                                max_length = len(str(cell.value))
-                        except:
-                            pass
+                            max_length = max(max_length, len(str(cell.value)))
+                        except Exception:
+                            log_except("premia_page: расчёт ширины колонки Excel")
                     adjusted_width = (max_length + 2) * 1.2  # Добавляем небольшой отступ
                     worksheet.column_dimensions[column_letter].width = adjusted_width
 

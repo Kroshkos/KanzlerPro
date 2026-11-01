@@ -1,20 +1,25 @@
-import flet as ft
-import pandas as pd
+
 # tkinter используется только для диалога выбора пути сохранения файлов;
 # импорт выполняется лениво внутри методов, чтобы приложение запускалось
 # даже на системах без установленной среды X11/tkinter.
-import os
-import shutil
-import base64
-from openpyxl.utils import get_column_letter
-from datetime import datetime, timedelta
-from database import add_student, get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
+
+import flet as ft
+
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
-import repositories as repo
-from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
-from pages.registry import get_page
+from authz import require_admin
+from constants import ADMIN_ROLE, DEFAULT_ROLE, ROLES
+from database import (
+    add_user,
+    delete_user,
+    get_user_by_id,
+    get_users,
+    log_action,
+    update_user_password,
+    update_user_role,
+)
+from utils import session_get, show_snack, to_int
+
 from pages import shell
-from utils import session_get, session_set, session_clear, show_snack, to_int
 
 
 class UsersPage(ft.Column):
@@ -23,10 +28,12 @@ class UsersPage(ft.Column):
 
     def __init__(self, page, parent=None):
         super().__init__(scroll=ft.ScrollMode.AUTO)
-        # Страница доступна только администраторам; при попытке прямого
-        # захода без прав возвращаемся в главное меню.
-        if session_get(page, "role") != ADMIN_ROLE:
-            self.controls = [ft.Text("Недостаточно прав для управления пользователями", color="red")]
+        # Страница доступна только администраторам. Проверка — через
+        # единую точку authz.require_admin (раньше здесь сравнивалась
+        # роль из session с литералом ADMIN_ROLE в обход authz).
+        denied = require_admin(page, "Управление пользователями доступно только администратору")
+        if denied is not None:
+            self.controls = [denied]
             return
         self._page = page
         self.username = session_get(self._page, "username")

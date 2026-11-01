@@ -5,14 +5,19 @@
 """
 
 import flet as ft
+from database import (
+    BLOCK_NAMES,
+    add_achievement,
+    count_achievements,
+    delete_achievement,
+    get_achievements,
+    import_achievements_from_csv,
+    log_action,
+)
+from theme import BG, TEXT_DARK, TEXT_MUTED, card, page_header
+from utils import session_get, to_int
 
-from database import (get_achievements, add_achievement, delete_achievement,
-                      count_achievements, import_achievements_from_csv,
-                      BLOCK_NAMES, log_action)
-from pages.registry import get_page
 from pages import shell
-from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED, card, page_header
-from utils import session_get, to_int, to_num
 
 
 class RoadmapCatalogPage(ft.Column):
