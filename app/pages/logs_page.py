@@ -9,6 +9,8 @@ import flet as ft
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 from authz import require_admin
 from database import (
+    LOGS_PAGE_SIZE,
+    count_logs,
     get_logs,
     log_action,
     verify_logs_chain,
@@ -68,6 +70,16 @@ class LogsPage(ft.Column):
         # Кнопка "Назад"
         self.back_button = ft.FilledButton("Назад", on_click=self.back_click)
 
+        # C-1 (второй этап): листание журнала страницами (SQL LIMIT/OFFSET)
+        self.current_page = 0
+        self.prev_button = ft.IconButton(
+            ft.Icons.CHEVRON_LEFT, on_click=self.prev_page_click,
+            tooltip="Предыдущая страница")
+        self.next_button = ft.IconButton(
+            ft.Icons.CHEVRON_RIGHT, on_click=self.next_page_click,
+            tooltip="Следующая страница")
+        self.page_label = ft.Text("", weight="bold")
+
         # B-5: баннер целостности журнала (виден только при разрыве цепочки)
         self.logs_banner = ft.Text(
             "", color=ft.Colors.RED_400, weight="bold", visible=False)
@@ -87,6 +99,9 @@ class LogsPage(ft.Column):
             ),
             ft.Divider(),
             self.logs_banner,
+            ft.Row(
+                [self.prev_button, self.page_label, self.next_button],
+                alignment=ft.MainAxisAlignment.CENTER),
             self.logs_table,
             self.back_button
         ]
@@ -95,26 +110,39 @@ class LogsPage(ft.Column):
         self.load_logs()
 
     def load_logs(self):
-        """Загружает и фильтрует логи в зависимости от выбранной даты и количества строк."""
-        logs = get_logs()
+        """Загружает и фильтрует логи в зависимости от выбранной даты и количества строк.
+
+        C-1 (второй этап): страница выбирается на уровне SQL (LIMIT/OFFSET),
+        а не срезом списка в памяти — журнал может расти без удорожания
+        отрисовки.
+        """
         self.logs_table.rows = []
 
-        # Фильтрация по дате
+        # Фильтрация по дате: условие выносится в SQL (параметром),
+        # чтобы offset считался уже по отфильтрованной выборке.
+        date_prefix = None
         selected_date = self.date_picker.value.strip()
         if selected_date:
             try:
                 # Преобразуем введённую дату в формат для сравнения
-                selected_date = datetime.strptime(selected_date, "%d.%m.%Y").strftime("%Y-%m-%d")
-                logs = [log for log in logs if log[0].startswith(selected_date)]
+                date_prefix = datetime.strptime(
+                    selected_date, "%d.%m.%Y").strftime("%Y-%m-%d") + "%"
             except ValueError:
                 show_snack(self._page, ft.Text("Неверный формат даты. Используйте ДД.ММ.ГГГГ"))
                 self._page.update()
                 return
 
-        # Ограничение количества строк
+        # Количество строк на странице ("Все строки" -> limit=None)
         rows_limit = self.rows_dropdown.value
-        if rows_limit != "Все строки":
-            logs = logs[:to_int(rows_limit, len(logs))]
+        page_size = LOGS_PAGE_SIZE if rows_limit == "Все строки" \
+            else to_int(rows_limit, LOGS_PAGE_SIZE)
+        total = count_logs(date_prefix=date_prefix)
+        total_pages = max(1, -(-total // page_size))  # ceil
+        # При смене размера страницы/фильтра не выходим за границы журнала
+        self.current_page = min(self.current_page, total_pages - 1)
+        offset = self.current_page * page_size
+
+        logs = get_logs(limit=page_size, offset=offset, date_prefix=date_prefix)
 
         # Заполняем таблицу
         for log in logs:
@@ -128,6 +156,10 @@ class LogsPage(ft.Column):
                     ]
                 )
             )
+        self.page_label.value = (
+            f"Стр. {self.current_page + 1} из {total_pages} (всего: {total})")
+        self.prev_button.disabled = self.current_page == 0
+        self.next_button.disabled = self.current_page >= total_pages - 1
         self._page.update()
 
         # B-5: проверка целостности хеш-цепочки журнала
@@ -144,8 +176,18 @@ class LogsPage(ft.Column):
         else:
             self.logs_banner.visible = False
 
+    def prev_page_click(self, e):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.load_logs()
+
+    def next_page_click(self, e):
+        self.current_page += 1
+        self.load_logs()
+
     def filter_logs(self, e):
         """Обработчик изменения даты или количества строк."""
+        self.current_page = 0  # новый фильтр — начинаем с первой страницы
         self.load_logs()
 
     def export_to_txt(self, e):

@@ -608,24 +608,40 @@ def get_users():
 LOGS_PAGE_SIZE = 100  # размер страницы журнала (продолжение C-1)
 
 
-def count_logs() -> int:
-    """Всего записей в журнале (для расчёта числа страниц, C-1)."""
-    rows = execute_query("SELECT COUNT(*) AS c FROM logs", fetch=True)
+def count_logs(date_prefix=None) -> int:
+    """Всего записей в журнале (для расчёта числа страниц, C-1).
+
+    date_prefix — необязательный префикс timestamp вида '2026-11-01%'
+    (фильтр по дате на странице журнала).
+    """
+    query = "SELECT COUNT(*) AS c FROM logs"
+    params = ()
+    if date_prefix:
+        query += " WHERE timestamp LIKE ?"
+        params = (date_prefix,)
+    rows = execute_query(query, params=params, fetch=True)
     return int(rows[0]["c"]) if rows else 0
 
 
-def get_logs(limit=None, offset=0):
+def get_logs(limit=None, offset=0, date_prefix=None):
     """Записи журнала действий.
 
     limit=None — все строки (обратная совместимость с dashboard_page),
     иначе — страница размером limit со смещением offset (пагинация, C-1).
+    date_prefix — SQL-LIKE-префикс timestamp ('2026-11-01%') для фильтра
+    по дате; условие применяется до LIMIT/OFFSET, поэтому страницы
+    соответствуют отфильтрованной выборке.
     """
-    query = "SELECT timestamp, username, action FROM logs ORDER BY timestamp DESC"
-    params = ()
+    query = "SELECT timestamp, username, action FROM logs WHERE 1=1"
+    params = []
+    if date_prefix:
+        query += " AND timestamp LIKE ?"
+        params.append(date_prefix)
+    query += " ORDER BY timestamp DESC"
     if limit is not None:
         query += " LIMIT ? OFFSET ?"
-        params = (int(limit), int(offset))
-    return execute_query(query, params=params, fetch=True)
+        params.extend((int(limit), int(offset)))
+    return execute_query(query, params=tuple(params), fetch=True)
 
 def search_students_by_multiple_params(surname=None, name=None, lastname=None, group_name=None, course=None, age=None, gender=None, birthday=None, birthplace=None, citizenship=None, nationality=None, religion=None, marital_status=None, residence=None, bad_habits=None, health_status=None, interests=None, skills=None):
     conn = connect_to_db()
