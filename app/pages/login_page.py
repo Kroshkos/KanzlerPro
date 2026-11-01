@@ -1,15 +1,8 @@
-
-# tkinter используется только для диалога выбора пути сохранения файлов;
-# импорт выполняется лениво внутри методов, чтобы приложение запускалось
-# даже на системах без установленной среды X11/tkinter.
-
 import flet as ft
 
+import ui_kit as k
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
-from database import (
-    check_user,
-    log_action,
-)
+from database import check_user, log_action
 from utils import session_set
 
 from pages.registry import get_page
@@ -18,46 +11,79 @@ from pages.registry import get_page
 class LoginPage(ft.Column):
     def __init__(self, page: ft.Page):
         super().__init__(
-            alignment=ft.MainAxisAlignment.CENTER,       # Вертикальное выравнивание по центру
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,  # Горизонтальное выравнивание по центру
-            expand=True                                  # Растягиваем столбец на всю страницу
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True,
         )
+        # Фон приложения задаём на уровне страницы (у Column в Flet 1.x нет bgcolor)
+        try:
+            page.bgcolor = k.BG_SOFT
+        except Exception:
+            pass
         # В Flet >= 0.29 у Control.page — свойство только для чтения,
         # поэтому сохраняем ссылку на страницу в собственном атрибуте _page.
         self._page = page
-        self.username = ft.TextField(label="Имя пользователя", width=300)
-        self.password = ft.TextField(label="Пароль", width=300, password=True)
-        self.login_button = ft.FilledButton("Войти", on_click=self.login_click)
-        self.error_text = ft.Text(color="red")
-        
-        # Оборачиваем элементы в контейнер для дополнительного контроля выравнивания
+        self.username = ft.TextField(
+            label="Имя пользователя",
+            hint_text="например, ivanov",
+            prefix_icon=ft.Icons.PERSON_OUTLINE,
+            border_radius=10,
+            autofocus=True,
+            on_submit=self._submit_enter,
+        )
+        self.password = ft.TextField(
+            label="Пароль",
+            password=True,
+            can_reveal_password=True,
+            prefix_icon=ft.Icons.LOCK_OUTLINE,
+            border_radius=10,
+            on_submit=self._submit_enter,
+        )
+        self.login_button = ft.FilledButton(
+            "Войти",
+            icon=ft.Icons.LOGIN,
+            on_click=self.login_click,
+            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+        )
+        self.notice = k.NoticeBox()
+
+        # Карточка входа по центру экрана
         self.controls = [
-            ft.Container(
-                content=ft.Column(
+            k.card(
+                ft.Column(
                     controls=[
-                        ft.Icon(ft.Icons.PERSON, size=64, color="#3b82f6"),
-                        ft.Text("Канцлер Про", size=28, weight="bold", color="#1e293b"),
+                        ft.Icon(ft.Icons.SCHOOL, size=56, color=k.PRIMARY),
+                        ft.Text("Канцлер Про", size=26, weight="bold",
+                                color=k.PRIMARY_DARK),
                         ft.Text("Учёт курсантов · Дорожная карта · Отчёты",
-                                size=13, color="#64748b"),
-                        self.username,
-                        self.password,
-                        self.login_button,
-                        self.error_text
+                                size=13, color=k.MUTED),
+                        ft.Divider(height=1, color=k.BORDER),
+                        ft.Row([self.username], width=340),
+                        ft.Row([self.password], width=340),
+                        self.notice.control,
+                        ft.Row([self.login_button], width=340),
+                        ft.Text("Enter в поле ввода — быстрый вход",
+                                size=11, color=k.MUTED),
                     ],
                     alignment=ft.MainAxisAlignment.CENTER,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=10
+                    spacing=12,
                 ),
-                padding=20
+                padding=32,
             )
         ]
 
+    def _submit_enter(self, e):
+        """Enter в любом из полей отправляет форму."""
+        self.login_click(e)
+
     def login_click(self, e):
-        page = self._page  # ссылка на ft.Page (в Flet >= 0.29 Control.page только для чтения)
-        username = self.username.value.strip()
-        password = self.password.value.strip()
+        # ссылка на ft.Page (в Flet >= 0.29 Control.page только для чтения)
+        page = self._page
+        username = (self.username.value or "").strip()
+        password = (self.password.value or "").strip()
         if not username or not password:
-            self.error_text.value = "Заполните все поля"
+            self.notice.show("Заполните имя пользователя и пароль", kind="warning")
         else:
             user = check_user(username, password)
             if user:
@@ -72,5 +98,5 @@ class LoginPage(ft.Column):
                 page.controls.clear()
                 page.add(get_page("KantslerApp")(page))
             else:
-                self.error_text.value = "Неверное имя пользователя или пароль"
+                self.notice.show("Неверное имя пользователя или пароль", kind="error")
         page.update()
