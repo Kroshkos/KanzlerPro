@@ -13,11 +13,12 @@ from database import add_student, get_students, check_user, search_students_by_m
 import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
+from pages import shell
 
 
 class SearchPage(ft.Column):
-    def __init__(self, page):
-        super().__init__()
+    def __init__(self, page, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
         
         # Основное поле для поиска по фамилии
@@ -206,6 +207,4 @@ class SearchPage(ft.Column):
 
     # Обработчик возврата на главную страницу
     def back_to_main(self, e):
-        self._page.controls.clear()
-        self._page.add(get_page("KantslerApp")(self._page))
-        self._page.update()
+        shell.back_to_app(self._page)

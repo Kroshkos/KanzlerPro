@@ -13,15 +13,13 @@ from database import add_student, get_students, check_user, search_students_by_m
 import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
+from pages import shell
 from utils import session_get, session_set, session_clear, show_snack
 
 
 class LogsPage(ft.Column):
-    def __init__(self, page):
-        super().__init__(
-            scroll=ft.ScrollMode.AUTO,  # Включаем прокрутку страницы
-            expand=True                # Растягиваем страницу для корректной прокрутки
-        )
+    def __init__(self, page, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
         self.username = session_get(self._page, "username")
 
@@ -155,6 +153,4 @@ class LogsPage(ft.Column):
 
     def back_click(self, e):
         log_action(self.username, "Возврат на главную страницу из журнала")
-        self._page.controls.clear()
-        self._page.add(get_page("KantslerApp")(self._page))
-        self._page.update()
+        shell.back_to_app(self._page)

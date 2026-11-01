@@ -13,15 +13,24 @@ from database import add_student, get_students, check_user, search_students_by_m
 import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
+from pages import shell
 from utils import show_snack
 
 
 class EncouragementWorkPage(ft.Column):
-    def __init__(self, page):
-        super().__init__()
+    def _wrap_control(self, control):
+        """Возвращает контрол для показа: внутри каркаса — через shell
+        (боковое меню сохраняется), автономно — как раньше."""
+        from pages import shell as _shell
+        sh = _shell.get_shell()
+        if sh is not None and self._page is not None:
+            sh.open_standalone(type(control).__name__, control)
+            return None
+        return control
+
+    def __init__(self, page, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
-        self.scroll = True
-        self.expand = True
 
         # Поле для ввода ФИО курсанта с автодополнением
         self.student_search_field = ft.TextField(
@@ -206,18 +215,24 @@ class EncouragementWorkPage(ft.Column):
             )
 
         self._page.update()
+    def _wrap_control(self, control):
+        """Возвращает контрол для показа: внутри каркаса — через shell
+        (боковое меню сохраняется), автономно — как раньше."""
+        from pages import shell as _shell
+        sh = _shell.get_shell()
+        if sh is not None and self._page is not None:
+            sh.open_standalone(type(control).__name__, control)
+            return None
+        return control
+
 
     def back_click(self, e):
-        self._page.controls.clear()
-        self._page.add(get_page("VprWorkPage")(self._page))
-        self._page.update()
+        shell.navigate(self._page, "VprWorkPage")
 
 class PenaltyWorkPage(ft.Column):
-    def __init__(self, page):
-        super().__init__()
+    def __init__(self, page, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
-        self.scroll = True
-        self.expand = True
 
         # Поле для ввода ФИО курсанта с автодополнением
         self.student_search_field = ft.TextField(
@@ -411,6 +426,4 @@ class PenaltyWorkPage(ft.Column):
         self._page.update()
 
     def back_click(self, e):
-        self._page.controls.clear()
-        self._page.add(get_page("VprWorkPage")(self._page))
-        self._page.update()
+        shell.navigate(self._page, "VprWorkPage")

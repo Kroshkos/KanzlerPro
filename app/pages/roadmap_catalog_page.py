@@ -10,13 +10,14 @@ from database import (get_achievements, add_achievement, delete_achievement,
                       count_achievements, import_achievements_from_csv,
                       BLOCK_NAMES, log_action)
 from pages.registry import get_page
+from pages import shell
 from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED, card, page_header
 from utils import session_get
 
 
 class RoadmapCatalogPage(ft.Column):
-    def __init__(self, page_obj):
-        super().__init__()
+    def __init__(self, page_obj, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page_obj
         self.block_filter = ft.Dropdown(
             label="Блок", width=260, value=None,
@@ -95,10 +96,7 @@ class RoadmapCatalogPage(ft.Column):
 
     # ------------------------------------------------------------------
     def go_home(self, e=None):
-        page = get_page("DashboardPage")(self._page)
-        self._page.controls.clear()
-        self._page.add(page)
-        self._page.update()
+        shell.navigate(self._page, "DashboardPage", dashboard=True)
 
     def refresh_table(self, e=None):
         rows = []

@@ -11,13 +11,14 @@ from database import (get_reviews, add_review, update_review, delete_review,
                       get_achievements, search_students_by_name_part,
                       calculate_final_points, log_action, BLOCK_NAMES)
 from pages.registry import get_page
+from pages import shell
 from theme import BG, TEXT_DARK, TEXT_MUTED, card, page_header, status_chip
 from utils import session_get
 
 
 class RoadmapExpertPage(ft.Column):
-    def __init__(self, page_obj):
-        super().__init__()
+    def __init__(self, page_obj, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page_obj
 
         # ---- выбор студента (по поиску ФИО, как в Канцлере) ----
@@ -96,9 +97,7 @@ class RoadmapExpertPage(ft.Column):
 
     # ------------------------------------------------------------------
     def go_home(self, e=None):
-        self._page.controls.clear()
-        self._page.add(get_page("DashboardPage")(self._page))
-        self._page.update()
+        shell.navigate(self._page, "DashboardPage", dashboard=True)
 
     def suggest_students(self, e):
         part = (self.student_search.value or "").strip()

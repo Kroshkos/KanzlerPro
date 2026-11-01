@@ -1,181 +1,314 @@
+"""Каркас приложения «Канцлер Про» — точка входа после авторизации.
+
+Современный полноэкранный интерфейс:
+  * адаптивная боковая панель навигации (сворачивается в компактную на
+    узких экранах, скрывается на мобильных);
+  * верхняя шапка с названием текущего раздела и учётной записью;
+  * область содержимого с фиксированными размерами — страницы больше не
+    бывают пустыми из-за "unbounded height";
+  * все межстраничные переходы идут через pages.shell, поэтому боковое
+    меню остаётся видимым на каждом экране.
+
+База данных заполняется заново; данные между разделами связываются через
+общую таблицу students (наследие Kanzler + Дорожная карта MKR).
+"""
+
 import flet as ft
-import pandas as pd
-# tkinter используется только для диалога выбора пути сохранения файлов;
-# импорт выполняется лениво внутри методов, чтобы приложение запускалось
-# даже на системах без установленной среды X11/tkinter.
-import os
-import shutil
-import base64
-from openpyxl.utils import get_column_letter
-from datetime import datetime, timedelta
-from database import add_student, get_students, check_user, search_students_by_multiple_params, add_encouragement, get_encouragements_by_student, add_penalty, get_penalties_by_student, search_students_by_name_part, get_subjects_by_name_part, log_action, get_users, add_user, update_user_role, delete_user, get_logs, get_user_by_id, update_user_password
-# Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
-import repositories as repo
-from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
+
 from pages.registry import get_page
-from utils import session_get, session_set, session_clear
-
-
+from pages import shell
 from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED
+from utils import session_get, session_clear
+from database import log_action
 
 
 class KantslerApp(ft.Column):
-    """Каркас приложения «Канцлер Про».
+    """Навигационный каркас: панель слева + контент справа."""
 
-    Точка входа после авторизации: боковая панель навигации слева +
-    область содержимого. Открывается информативный дашборд; все разделы
-    (Kanzler + Дорожная карта MKR) доступны через боковое меню.
-    """
-
-    #: Пункты бокового меню: (класс страницы, подпись, иконка)
+    #: Пункты меню: (ключ, класс страницы, подпись, иконка)
     NAV_ITEMS = [
-        ("DashboardPage", "Дашборд", ft.Icons.SPACE_DASHBOARD_ROUNDED),
-        ("SearchPage", "Поиск курсанта", ft.Icons.SEARCH),
-        ("KadriWorkPage", "Кадровая работа", ft.Icons.BADGE),
-        ("SessionResultsPage", "Учебная работа", ft.Icons.SCHOOL),
-        ("VprWorkPage", "ВПР", ft.Icons.SHIELD),
-        ("PremiaWorkPage", "Премии", ft.Icons.WALLET),
-        ("PersonalFilePage", "Личное дело", ft.Icons.FOLDER_SPECIAL),
-        ("RoadmapCatalogPage", "Достижения Road Map", ft.Icons.CELL_TOWER),
-        ("RoadmapExpertPage", "Экспертиза", ft.Icons.VERIFIED),
-        ("RoadmapIprPage", "ИПР курсанта", ft.Icons.EVENT_NOTE),
+        ("dashboard", "DashboardPage", "Дашборд", ft.Icons.SPACE_DASHBOARD_ROUNDED),
+        ("search", "SearchPage", "Поиск курсанта", ft.Icons.SEARCH),
+        ("kadri", "KadriWorkPage", "Кадровая работа", ft.Icons.BADGE),
+        ("study", "SessionResultsPage", "Учебная работа", ft.Icons.SCHOOL),
+        ("vpr", "VprWorkPage", "ВПР", ft.Icons.SHIELD),
+        ("premia", "PremiaWorkPage", "Премии", ft.Icons.WALLET),
+        ("files", "PersonalFilePage", "Личное дело", ft.Icons.FOLDER_SPECIAL),
+        ("catalog", "RoadmapCatalogPage", "Достижения Road Map", ft.Icons.CELL_TOWER),
+        ("expert", "RoadmapExpertPage", "Экспертиза", ft.Icons.VERIFIED),
+        ("ipr", "RoadmapIprPage", "ИПР курсанта", ft.Icons.EVENT_NOTE),
     ]
     ADMIN_ITEMS = [
-        ("UsersPage", "Пользователи", ft.Icons.PERSON_ADD_ALT),
-        ("LogsPage", "Журнал действий", ft.Icons.HISTORY),
+        ("users", "UsersPage", "Пользователи", ft.Icons.PERSON_ADD_ALT),
+        ("logs", "LogsPage", "Журнал действий", ft.Icons.HISTORY),
     ]
+
+    WIDTH_SIDEBAR = 250      # полная панель (>= 1400 px)
+    WIDTH_COMPACT = 76       # иконки (900..1400 px)
+    CONTENT_PADDING = 28     # отступы области контента
 
     def __init__(self, page):
         super().__init__()
-        # Flet 1.x: Column по умолчанию скроллируется (AutoScrollView) и даёт
-        # детям неограниченную высоту — NavigationRail на этом падает с
-        # ошибкой "height is unbounded". Отключаем скролл каркаса.
-        self.scroll = None
         if page is None:
             raise ValueError("Page is null")
-        # Защита от прямого входа без авторизации (например, вызов из консоли/отладки)
+
+        # Защита от прямого входа без авторизации
         if not session_get(page, "username"):
             page.controls.clear()
             page.add(get_page("LoginPage")(page))
             page.update()
             return
-        self._page = page
-        self.username = session_get(self._page, "username")
+
+        self._fpage = page
+        self.username = session_get(page, "username")
         self.role = session_get(page, "role")
+        self._active_key = None
+        self._title_ref = None
+        self._subtitle_ref = None
 
-        # ---------- Каркас нового интерфейса ----------
-        # Собственная панель навигации вместо ft.NavigationRail:
-        #   1) NavigationRail в Flet 1.x падает с "height is unbounded"
-        #      внутри скроллируемых обёрток страницы;
-        #   2) при ошибке отрисовки rail показывает пустую белую полосу —
-        #      именно её наблюдали пользователи ("широкая белая полоса").
-        # Панель из обычных контролов работает при любой конфигурации.
-        # Область содержимого — скроллируемый Row с stretch-выравниванием:
-        # страница занимает всю высоту окна при коротком контенте и получает
-        # вертикальный скролл при длинном (работает в Flet 1.x).
-        self._page_holder = ft.Container(width=0, visible=False)
-        self.content_area = ft.Row(
-            [self._page_holder],
-            expand=True,
-            scroll=ft.ScrollMode.AUTO,
-            spacing=0,
-            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
-            alignment=ft.MainAxisAlignment.START,
+        # ---------- Область содержимого ----------
+        # Контент оборачивается в Column со скроллом: страница занимает всю
+        # высоту окна, длинный контент прокручивается. Ширина выставляется
+        # явно при ресайзе (Flet 1.x не даёт Row растягивать детей поперёк
+        # оси прокрутки — именно из-за этого страницы раньше пустовали).
+        self._content_col = ft.Column(
+            [], scroll=ft.ScrollMode.AUTO, width=self._content_width(),
         )
-        self._nav_buttons = {}
-        nav_children = [
-            ft.Container(
-                content=ft.Column([
-                    ft.Icon(ft.Icons.SHIELD_ROUNDED, color=PRIMARY, size=30),
-                    ft.Text("Канцлер Про", size=13, weight="bold",
-                            color=TEXT_DARK, text_align="center"),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=4),
-                padding=ft.Padding(8, 16, 8, 12)),
-        ]
-        items = list(self.NAV_ITEMS)
-        if self.role == ADMIN_ROLE:
-            items += list(self.ADMIN_ITEMS)
-        self._nav_names = []
-        for name, label, icon in items:
-            self._nav_names.append(name)
-            btn = ft.Container(
-                content=ft.Row([
-                    ft.Icon(icon, size=20, color="#475569"),
-                    ft.Text(label, size=13, color=TEXT_DARK,
-                            no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),
-                ], spacing=10,
-                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                padding=ft.Padding(12, 9, 12, 9),
-                border_radius=8,
-                margin=ft.Margin(6, 2, 6, 2),
-                ink=True,
-                on_click=lambda e, n=name: self.go_to(n),
-            )
-            self._nav_buttons[name] = btn
-            nav_children.append(btn)
-        # Кнопки разделов — скроллируемый список; выход прижат к низу панели.
-        self._nav_list = ft.ListView(nav_children[1:], spacing=1,
-                                     height=690, expand=False)
-        self.nav_panel = ft.Container(
-            width=210,
+        self.content_area = ft.Container(
+            content=self._content_col,
+            expand=True,
+            bgcolor=BG,
+            alignment=ft.Alignment(-1, -1),
+            padding=ft.Padding(self.CONTENT_PADDING, 18,
+                               self.CONTENT_PADDING, 18),
+        )
+
+        # ---------- Верхняя шапка ----------
+        self._title_ref = ft.Text("Дашборд", size=18, weight="bold",
+                                  color=TEXT_DARK)
+        self._subtitle_ref = ft.Text("", size=12, color=TEXT_MUTED)
+        header = ft.Container(
+            content=ft.Row([
+                ft.IconButton(ft.Icons.MENU_ROUNDED, icon_color=TEXT_DARK,
+                              tooltip="Показать/скрыть меню",
+                              on_click=self.toggle_sidebar),
+                ft.Column([self._title_ref, self._subtitle_ref], spacing=2),
+                ft.Container(expand=True),
+                ft.CircleAvatar(
+                    content=ft.Text(str(self.username)[:1].upper(),
+                                    color="#ffffff", weight="bold"),
+                    radius=16, bgcolor=PRIMARY),
+                ft.Text(str(self.username), size=13, color=TEXT_DARK),
+                ft.IconButton(ft.Icons.LOGOUT_ROUNDED, icon_color="#64748b",
+                              tooltip="Выйти", on_click=self.logout_click),
+            ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor="#ffffff",
-            border=ft.Border(right=ft.BorderSide(1, "#e2e8f0")),
-            content=ft.Column([
-                nav_children[0],          # логотип
-                self._nav_list,           # разделы (со скроллом)
-                ft.Container(             # пользователь + выход внизу
-                    content=ft.Row([
-                        ft.IconButton(ft.Icons.LOGOUT, tooltip="Выход",
-                                      on_click=self.logout_click),
-                        ft.Text(str(self.username), size=12, color=TEXT_MUTED,
-                                no_wrap=True),
-                    ], spacing=4,
-                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    padding=ft.Padding(10, 8, 8, 12)),
-            ], spacing=1),
+            padding=ft.Padding(10, 6, 16, 6),
+            border=ft.Border(bottom=ft.BorderSide(1, "#e2e8f0")),
         )
 
-        self.shell = ft.Row(
-            [self.nav_panel, self.content_area],
-            spacing=0,
-            expand=True,
-            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
-        )
+        # ---------- Боковая панель ----------
+        self.nav_panel = ft.Container(width=self.WIDTH_COMPACT,
+                                      bgcolor="#ffffff", border_radius=0)
+        self._build_nav()
+
+        right_side = ft.Column([header, self.content_area], spacing=0,
+                               expand=True)
+        self.shell = ft.Row([self.nav_panel, right_side], spacing=0,
+                            expand=True,
+                            vertical_alignment=ft.CrossAxisAlignment.STRETCH)
+
+        self.scroll = None
+        self.expand = True
         self.controls = [self.shell]
+
+        # Регистрация каркаса: страницы через pages.shell будут открываться
+        # внутри области содержимого, а не заменять всю страницу.
+        shell.set_shell(self)
+
+        # Реакция на изменение размера окна (fullscreen / restore)
+        try:
+            self._fpage.on_resize = self._on_resize
+        except Exception:
+            pass
+
         self.show_dashboard()
 
     # ------------------------------------------------------------------
-    # Навигация каркаса
+    # Размеры / адаптивность
     # ------------------------------------------------------------------
-    def go_to(self, cls_name, keep_selection=None):
-        """Открывает страницу внутри области содержимого (без перезагрузки page)."""
-        page_cls = get_page(cls_name)
-        try:
-            view = page_cls(self._page, parent=self)
-        except TypeError:
-            view = page_cls(self._page)
-        # Оборачиваем страницу в Container с фиксированной шириной, чтобы
-        # она занимала всю ширину области содержимого (Row не поддерживает
-        # expand дочерних контролов поперёк оси прокрутки).
-        self._page_holder.content = view
-        self._page_holder.width = max((self._page.width or 1200) - 250, 600)
-        self._page_holder.visible = True
-        # Подсветка активного пункта бокового меню
-        for n, btn in self._nav_buttons.items():
-            active = (n == cls_name)
-            btn.bgcolor = "rgba(59,130,246,0.12)" if active else None
+    def _sidebar_mode(self):
+        w = self._fpage.width or 1200
+        if w >= 1400:
+            return "full"
+        if w >= 900:
+            return "compact"
+        return "hidden"
+
+    def _panel_width(self):
+        mode = self._sidebar_mode()
+        if mode == "full":
+            return self.WIDTH_SIDEBAR
+        if mode == "compact":
+            return self.WIDTH_COMPACT
+        return 0
+
+    def _content_width(self):
+        w = self._fpage.width or 1200
+        return max(w - self._panel_width() - 2, 320)
+
+    def _on_resize(self, e):
+        mode = self._sidebar_mode()
+        pw = self._panel_width()
+        if pw != self.nav_panel.width:
+            self.nav_panel.width = pw
+            self._build_nav()
+        cw = self._content_width()
+        if cw != self._content_col.width:
+            self._content_col.width = cw
+        self._fpage.update()
+
+    def toggle_sidebar(self, e=None):
+        """Переключение полной/компактной панели (мобильный — скрытие)."""
+        mode = self._sidebar_mode()
+        if mode == "full":
+            self._forced = "compact"
+            self.nav_panel.width = self.WIDTH_COMPACT
+        elif mode == "compact":
+            self._forced = "full"
+            self.nav_panel.width = self.WIDTH_SIDEBAR
+        else:
+            self._forced = "compact"
+            self.nav_panel.width = self.WIDTH_COMPACT
+        self._content_col.width = max((self._fpage.width or 1200)
+                                      - self.nav_panel.width - 2, 320)
+        self._build_nav()
+        self._fpage.update()
+
+    # ------------------------------------------------------------------
+    # Построение панели навигации
+    # ------------------------------------------------------------------
+    def _build_nav(self):
+        compact = (self.nav_panel.width or self.WIDTH_COMPACT) <= 100
+        items = list(self.NAV_ITEMS)
+        if self.role == "admin":
+            items += list(self.ADMIN_ITEMS)
+
+        logo_children = [ft.Icon(ft.Icons.SHIELD_ROUNDED, color=PRIMARY,
+                                 size=28)]
+        if not compact:
+            logo_children.append(ft.Text("Канцлер Про", size=15,
+                                         weight="bold", color=TEXT_DARK))
+        children = [
+            ft.Container(
+                content=ft.Row(logo_children, spacing=10,
+                               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                padding=ft.Padding(14, 16, 14, 12)),
+        ]
+        self._nav_buttons = {}
+        for key, cls_name, label, icon in items:
+            row_children = [ft.Icon(icon, size=22, color="#475569")]
+            if not compact:
+                row_children.append(
+                    ft.Text(label, size=13.5, color=TEXT_DARK, no_wrap=True,
+                            overflow=ft.TextOverflow.ELLIPSIS))
+            active = (key == self._active_key)
+            btn = ft.Container(
+                content=ft.Row(row_children, spacing=12,
+                               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                padding=ft.Padding(14, 10, 14, 10),
+                border_radius=10,
+                margin=ft.Margin(8, 1, 8, 1),
+                ink=True,
+                tooltip=label,
+                on_click=lambda e, k=key, c=cls_name, l=label: self.go_to(c, key=k, title=l),
+            )
+            if active:
+                btn.bgcolor = "rgba(59,130,246,0.12)"
+                btn.content.controls[0].color = PRIMARY
+                btn.content.controls[-1].weight = "bold"
+                btn.content.controls[-1].color = PRIMARY
+            self._nav_buttons[key] = btn
+            children.append(btn)
+
+        footer_children = []
+        if compact:
+            footer_children = [ft.IconButton(
+                ft.Icons.LOGOUT_ROUNDED, icon_color="#64748b",
+                tooltip="Выйти", on_click=self.logout_click)]
+        else:
+            footer_children = [
+                ft.Text(str(self.username), size=12, color=TEXT_MUTED,
+                        no_wrap=True),
+                ft.Text(f"Роль: {self.role}", size=11, color=TEXT_MUTED),
+            ]
+        children.append(ft.Container(
+            content=ft.Row(footer_children, spacing=6,
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding(12, 10, 8, 14)))
+
+        self.nav_panel.content = ft.Column(children, spacing=1)
+
+    # ------------------------------------------------------------------
+    # Навигация
+    # ------------------------------------------------------------------
+    def go_to(self, cls_name, *extra, keep_selection=None, key=None, title=None,
+              view=None):
+        """Открывает страницу внутри области содержимого (меню сохраняется)."""
+        if view is None:
+            page_cls = get_page(cls_name)
             try:
-                row = btn.content
-                row.controls[0].color = PRIMARY if active else "#475569"
-                row.controls[1].weight = "bold" if active else None
-                row.controls[1].color = PRIMARY if active else TEXT_DARK
-            except Exception:
-                pass
-        self._page.update()
+                view = page_cls(self._fpage, *extra, parent=self)
+            except TypeError:
+                view = page_cls(self._fpage, *extra)
+
+        # Контейнер с фиксированной шириной и автоскроллом — страницы
+        # гарантированно получают ограниченные размеры (нет пустых экранов).
+        holder = ft.Container(
+            content=view,
+            width=self._content_col.width - self.CONTENT_PADDING * 2,
+            bgcolor=BG,
+        )
+        self._content_col.controls = [holder]
+
+        # Подсветка активного пункта и заголовок шапки
+        active_key = key
+        if active_key is None:
+            for k, cn, lbl, ic in list(self.NAV_ITEMS) + list(self.ADMIN_ITEMS):
+                if cn == cls_name:
+                    active_key, title = k, lbl
+                    break
+        self._active_key = active_key
+        if title:
+            self._title_ref.value = title
+            self._subtitle_ref.value = ""
+        self._build_nav()
+        self._fpage.update()
+
+    def open_standalone(self, cls_name, view):
+        """Открывает произвольный контрол внутри каркаса (для кнопок
+        «Добавить курсанта», «Редактировать» и т.п.). Меню остаётся."""
+        self.go_to(cls_name, view=view,
+                   title=self._subpage_title(cls_name))
+
+    @staticmethod
+    def _subpage_title(cls_name):
+        TITLES = {
+            "AddStudentPage": "Новый курсант",
+            "ShowStudentsPage": "Список курсантов",
+            "EditStudentPage": "Редактирование курсанта",
+            "PositionChangePage": "Изменение должности",
+            "RankChangePage": "Изменение звания",
+            "EncouragementWorkPage": "Поощрения",
+            "PenaltyWorkPage": "Взыскания",
+            "StudiWorkPage": "Учебная работа",
+            "KadriWorkPage": "Кадровая работа",
+            "VprWorkPage": "ВПР",
+        }
+        return TITLES.get(cls_name, cls_name)
 
     def show_dashboard(self):
-        self.go_to("DashboardPage", keep_selection=0)
+        self.go_to("DashboardPage", key="dashboard", title="Дашборд")
 
     def show_legacy_menu(self):
         """Совместимость: старое меню убрано — открываем дашборд."""
@@ -183,7 +316,8 @@ class KantslerApp(ft.Column):
 
     def logout_click(self, e=None):
         log_action(self.username, "Выход из учетной записи")
-        session_clear(self._page)
-        self._page.controls.clear()
-        self._page.add(get_page("LoginPage")(self._page))
-        self._page.update()
+        session_clear(self._fpage)
+        shell.set_shell(None)
+        self._fpage.controls.clear()
+        self._fpage.add(get_page("LoginPage")(self._fpage))
+        self._fpage.update()

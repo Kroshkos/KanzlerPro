@@ -13,15 +13,24 @@ from database import add_student, get_students, check_user, search_students_by_m
 import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
+from pages import shell
 from utils import session_get, session_set, session_clear, show_snack
 
 
 class PremiaWorkPage(ft.Column):
-    def __init__(self, page):
-        super().__init__()
+    def _wrap_control(self, control):
+        """Возвращает контрол для показа: внутри каркаса — через shell
+        (боковое меню сохраняется), автономно — как раньше."""
+        from pages import shell as _shell
+        sh = _shell.get_shell()
+        if sh is not None and self._page is not None:
+            sh.open_standalone(type(control).__name__, control)
+            return None
+        return control
+
+    def __init__(self, page, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
-        self.scroll = True
-        self.expand = True
 
         # Поля для выбора курса, дат и семестра
         self.course_dropdown = ft.Dropdown(
@@ -246,8 +255,16 @@ class PremiaWorkPage(ft.Column):
 
             show_snack(self._page, ft.Text(f"Файл сохранен: {file_path}"))
             self._page.update()
+    def _wrap_control(self, control):
+        """Возвращает контрол для показа: внутри каркаса — через shell
+        (боковое меню сохраняется), автономно — как раньше."""
+        from pages import shell as _shell
+        sh = _shell.get_shell()
+        if sh is not None and self._page is not None:
+            sh.open_standalone(type(control).__name__, control)
+            return None
+        return control
+
 
     def back_click(self, e):
-        self._page.controls.clear()
-        self._page.add(get_page("KantslerApp")(self._page))
-        self._page.update()
+        shell.back_to_app(self._page)

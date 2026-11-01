@@ -13,6 +13,7 @@ from database import add_student, get_students, check_user, search_students_by_m
 import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
+from pages import shell
 from utils import session_get, session_set, session_clear, show_snack
 
 
@@ -20,8 +21,8 @@ class UsersPage(ft.Column):
     # Допустимые роли — единый источник правды для всего приложения
     ROLES = ROLES  # из constants.py — единый источник истины
 
-    def __init__(self, page):
-        super().__init__()
+    def __init__(self, page, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         # Страница доступна только администраторам; при попытке прямого
         # захода без прав возвращаемся в главное меню.
         if session_get(page, "role") != ADMIN_ROLE:
@@ -173,6 +174,4 @@ class UsersPage(ft.Column):
 
     def back_click(self, e):
         log_action(self.username, "Возврат на главную страницу из управления пользователями")
-        self._page.controls.clear()
-        self._page.add(get_page("KantslerApp")(self._page))
-        self._page.update()
+        shell.back_to_app(self._page)

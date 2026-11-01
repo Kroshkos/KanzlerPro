@@ -13,12 +13,23 @@ from database import add_student, get_students, check_user, search_students_by_m
 import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
+from pages import shell
 from utils import session_get, session_set, session_clear, show_snack
 
 
 class StudiWorkPage(ft.Column):
-    def __init__(self, page):
-        super().__init__()
+    def _wrap_control(self, control):
+        """Возвращает контрол для показа: внутри каркаса — через shell
+        (боковое меню сохраняется), автономно — как раньше."""
+        from pages import shell as _shell
+        sh = _shell.get_shell()
+        if sh is not None and self._page is not None:
+            sh.open_standalone(type(control).__name__, control)
+            return None
+        return control
+
+    def __init__(self, page, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page            
         self.back_button = ft.FilledButton("Назад", on_click=self.back_click)
 
@@ -28,17 +39,23 @@ class StudiWorkPage(ft.Column):
         ]
 
     # Обработчик нажатия кнопки "Назад" 
+    def _wrap_control(self, control):
+        """Возвращает контрол для показа: внутри каркаса — через shell
+        (боковое меню сохраняется), автономно — как раньше."""
+        from pages import shell as _shell
+        sh = _shell.get_shell()
+        if sh is not None and self._page is not None:
+            sh.open_standalone(type(control).__name__, control)
+            return None
+        return control
+
     def back_click(self, e):
-        self._page.controls.clear()
-        self._page.add(get_page("KantslerApp")(self._page))
-        self._page.update()
+        shell.back_to_app(self._page)
 
 class VprWorkPage(ft.Column):
-    def __init__(self, page):
-        super().__init__()
+    def __init__(self, page, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
-        self.scroll = True
-        self.expand = True
 
         self.add_encouragement_button = ft.FilledButton("Добавить поощрение", width=300, on_click=self.encouragement_click)
         self.add_penalty_button = ft.FilledButton("Добавить взыскание", width=300, on_click=self.penalty_click)
@@ -55,28 +72,20 @@ class VprWorkPage(ft.Column):
 
     # Обработчик нажатия кнопки "Добавить поощрение"
     def encouragement_click(self, e):
-        self._page.controls.clear()
-        self._page.add(get_page("EncouragementWorkPage")(self._page))
-        self._page.update()
+        shell.navigate(self._page, "EncouragementWorkPage")
 
     # Обработчик нажатия кнопки "Добавить взыскание"
     def penalty_click(self, e):
-        self._page.controls.clear()
-        self._page.add(get_page("PenaltyWorkPage")(self._page))
-        self._page.update()
+        shell.navigate(self._page, "PenaltyWorkPage")
 
     # Обработчик нажатия кнопки "Назад"
     def back_click(self, e):
-        self._page.controls.clear()
-        self._page.add(get_page("KantslerApp")(self._page))
-        self._page.update()
+        shell.back_to_app(self._page)
 
 class SessionResultsPage(ft.Column):
-    def __init__(self, page):
-        super().__init__()
+    def __init__(self, page, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page
-        self.scroll = True
-        self.expand = True
 
         # Поле для ввода группы с автодополнением
         self.group_search_field = ft.TextField(
@@ -479,6 +488,4 @@ class SessionResultsPage(ft.Column):
         self._page.update()
 
     def back_click(self, e):
-        self._page.controls.clear()
-        self._page.add(get_page("KantslerApp")(self._page))
-        self._page.update()
+        shell.back_to_app(self._page)

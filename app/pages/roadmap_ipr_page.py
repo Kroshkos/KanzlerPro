@@ -14,6 +14,7 @@ from database import (search_students_by_name_part, get_individual_plan,
                       get_manual_scores, delete_manual_score,
                       get_student_total_points, BLOCK_NAMES, log_action)
 from pages.registry import get_page
+from pages import shell
 from theme import BG, PRIMARY, SUCCESS, TEXT_DARK, TEXT_MUTED, card, page_header
 from utils import session_get, show_snack
 
@@ -25,8 +26,8 @@ IPR_STATUS_LABELS = {
 
 
 class RoadmapIprPage(ft.Column):
-    def __init__(self, page_obj):
-        super().__init__()
+    def __init__(self, page_obj, parent=None):
+        super().__init__(scroll=ft.ScrollMode.AUTO)
         self._page = page_obj
         self.username = session_get(page_obj, "username") or ""
 
@@ -111,9 +112,7 @@ class RoadmapIprPage(ft.Column):
 
     # ------------------------------------------------------------------
     def go_home(self, e=None):
-        self._page.controls.clear()
-        self._page.add(get_page("DashboardPage")(self._page))
-        self._page.update()
+        shell.navigate(self._page, "DashboardPage", dashboard=True)
 
     def _student_id(self):
         try:
