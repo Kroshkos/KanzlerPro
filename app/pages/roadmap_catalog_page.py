@@ -187,7 +187,6 @@ class RoadmapCatalogPage(ft.Column):
         from xlsx_import import commit_import, parse_workbook
 
         rows = parse_workbook(path)
-        valid = [r for r in rows if r.ok]
         bad = [r for r in rows if not r.ok]
         inserted = commit_import(
             rows,

@@ -117,9 +117,65 @@ def check_backups():
     return [] if fresh else ["backups-stale"]
 
 
+def check_photos():
+    """Целостность файлового хранилища фото (BACKLOG C-3/D-3).
+
+    * каталог PHOTOS_DIR существует и доступен для записи;
+    * в БД не осталось незамигрированных base64-значений o_photo —
+      иначе файл базы раздут, а карточки показывают медленный data-URI;
+    * на каждое имя файла из o_photo есть соответствующий файл на диске
+      (потерянные файлы — предупреждение, не ошибка: запись курсанта
+      при этом остаётся валидной).
+    """
+    try:
+        from photo_storage import legacy_base64_count, photo_path
+    except ImportError as e:  # pragma: no cover
+        _check_line("Хранилище фото", False, f"модуль недоступен: {e}")
+        return ["photos-module"]
+
+    problems = []
+    from config import DB_PATH, PHOTOS_DIR
+
+    writable = os.access(PHOTOS_DIR, os.W_OK) if os.path.isdir(PHOTOS_DIR) else False
+    if not _check_line("PHOTOS_DIR (запись)", writable or not os.path.isfile(DB_PATH),
+                       PHOTOS_DIR):
+        problems.append("photos-dir")
+
+    if not os.path.isfile(DB_PATH):
+        _check_line("Фото в БД", True, "база ещё не создана — проверять нечего")
+        return problems
+
+    try:
+        legacy = legacy_base64_count()
+    except sqlite3.Error as e:
+        _check_line("Фото в БД", False, f"ошибка запроса: {e}")
+        return ["photos-query"]
+    if not _check_line("Фото в БД (base64-легаси)", legacy == 0,
+                       f"незамигрированных записей: {legacy} "
+                       "(выполните photo_storage.migrate_legacy_base64())"
+                       if legacy else "все фото в файлах"):
+        problems.append("photos-legacy-base64")
+
+    from database import get_photo_references
+
+    missing = 0
+    refs = get_photo_references()
+    for _sid, value in refs:
+        path = photo_path(value or "")
+        if path is None:
+            continue  # base64-легаси учтено проверкой выше
+        if not os.path.exists(path):
+            missing += 1
+    _check_line("Файлы фото на диске", True,
+                f"{len(refs)} ссылок, отсутствующих файлов: {missing}"
+                + (" — ПРЕДУПРЕЖДЕНИЕ" if missing else ""))
+    return problems
+
+
 def check_versions():
     """Версии ключевых зависимостей (справочно, не влияет на код выхода)."""
-    packages = ("flet", "pandas", "openpyxl", "reportlab")
+    packages = ("flet", "pandas", "openpyxl", "reportlab",
+                "python-docx", "python-dotenv")
     from importlib.metadata import PackageNotFoundError, version
 
     parts = []
@@ -141,6 +197,7 @@ def run_checks():
     problems += check_paths()
     problems += check_database_integrity()
     problems += check_logs_chain()
+    problems += check_photos()
     problems += check_backups()
     problems += check_versions()
     print("-" * 60)
