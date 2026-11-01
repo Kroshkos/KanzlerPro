@@ -186,9 +186,19 @@ class RoadmapExpertPage(ft.Column):
     def decide(self, review_id, status, final_points):
         if not self._guard_write():
             return
-        update_review(review_id, status, final_points=final_points)
-        log_action(session_get(self._page, "username"),
-                   f"Road Map: решение '{status}' по заявке №{review_id}")
+        if status == "deleted":
+            # Удаление записи — через delete_review (DELETE FROM).
+            # Раньше сюда вёл пункт «Удалить запись», но update_review с
+            # таким статусом лишь помечал строку и она навсегда исчезала
+            # из всех фильтров (get_reviews возвращает только известные
+            # статусы) — фактически это была тихая порча данных.
+            delete_review(review_id)
+            log_action(session_get(self._page, "username"),
+                       f"Road Map: удалена заявка №{review_id}")
+        else:
+            update_review(review_id, status, final_points=final_points)
+            log_action(session_get(self._page, "username"),
+                       f"Road Map: решение '{status}' по заявке №{review_id}")
         self.refresh_table()
 
     def refresh_table(self, e=None):

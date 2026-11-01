@@ -1042,6 +1042,11 @@ def init_mkr_tables():
     """Создаёт таблицы Дорожной карты (идемпотентно)."""
     for sql in MKR_TABLES_SQL:
         execute_query(sql)
+    # Лёгкая миграция: в исторической CREATE TABLE roadmap_reviews не было
+    # created_at, из-за чего запрос уведомлений (get_recent_pending_reviews)
+    # всегда падал в except. Колонка добавляется один раз; значение по
+    # умолчанию для новых записей проставляет add_review.
+    ensure_column("roadmap_reviews", "created_at", "DATETIME")
 
 
 # Названия блоков достижений (справочник Road Map)
@@ -1142,7 +1147,18 @@ def count_pending_reviews():
 
 
 def get_recent_pending_reviews(limit=10):
-    """Последние новые заявки (для колокольчика уведомлений)."""
+    """Последние новые заявки (для колокольчика уведомлений).
+
+    Примечание: в CREATE TABLE roadmap_reviews колонки created_at нет —
+    раньше запрос всегда падал в except и использовался медленный запасной
+    вариант. Теперь created_at добавляется идемпотентной миграцией
+    ensure_column (см. init_mkr_tables), а запасной запрос оставлен на
+    случай, если старая БД ещё не мигрирована.
+    """
+    try:
+        ensure_column("roadmap_reviews", "created_at", "DATETIME")
+    except Exception:
+        pass  # если ALTER недоступен (например, база только для чтения)
     try:
         return execute_query(
             "SELECT r.id, r.student_id, s.o_surname, s.o_name, s.o_lastname, "
@@ -1184,12 +1200,12 @@ def add_review(student_id, achievement_id, semester, status="pending",
         """INSERT INTO roadmap_reviews
            (student_id, achievement_id, status, expert_comment, reviewed_at,
             confirmation_file, semester, k_ur, k_role, k_vn, k_st, final_points,
-            duration_months, grant_amount, ip_bonus)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            duration_months, grant_amount, ip_bonus, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (student_id, str(achievement_id), status, comment,
          now if status != "pending" else None,
          confirmation_file, int(semester), k_ur, k_role, k_vn, k_st, final,
-         duration_months, grant_amount, ip_bonus))
+         duration_months, grant_amount, ip_bonus, now))
 
 
 def update_review(review_id, status, comment=None, final_points=None):

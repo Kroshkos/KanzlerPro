@@ -12,6 +12,7 @@ from database import add_student, get_students, check_user, search_students_by_m
 # Слой репозиториев: UI больше не пишет SQL напрямую (см. repositories.py)
 import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
+from authz import require_admin
 from pages.registry import get_page
 from pages import shell
 from utils import session_get, session_set, session_clear, show_snack, to_int
@@ -23,10 +24,12 @@ class UsersPage(ft.Column):
 
     def __init__(self, page, parent=None):
         super().__init__(scroll=ft.ScrollMode.AUTO)
-        # Страница доступна только администраторам; при попытке прямого
-        # захода без прав возвращаемся в главное меню.
-        if session_get(page, "role") != ADMIN_ROLE:
-            self.controls = [ft.Text("Недостаточно прав для управления пользователями", color="red")]
+        # Страница доступна только администраторам. Проверка — через
+        # единую точку authz.require_admin (раньше здесь сравнивалась
+        # роль из session с литералом ADMIN_ROLE в обход authz).
+        denied = require_admin(page, "Управление пользователями доступно только администратору")
+        if denied is not None:
+            self.controls = [denied]
             return
         self._page = page
         self.username = session_get(self._page, "username")

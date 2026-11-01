@@ -49,4 +49,7 @@ def require_admin(page, message="Недостаточно прав"):
 
 
 #: Классы страниц, требующие роль «Администратор».
-ADMIN_ONLY_PAGES = frozenset({"UsersPage", "LogsPage"})
+#: RoadmapExpertPage — потому что страница выдаёт/отзывает баллы Дорожной
+#: карты; без проверки любой пользователь мог начислить себе баллы (см.
+#: аудит, находка по разделу «Безопасность»).
+ADMIN_ONLY_PAGES = frozenset({"UsersPage", "LogsPage", "RoadmapExpertPage"})

@@ -243,6 +243,102 @@ def list_latest_session_results(student_id: int, semester: str) -> List[Row]:
     ) or []
 
 
+# ---------- Премии (PremiaWorkPage): батчевые версии N+1-запросов ----------
+# show_results_click раньше для каждого курсанта курса выполнял 4 отдельных
+# запроса (должность, звание, взыскания, сессия). При 100+ курсантов это
+# сотни open/close соединения. Ниже — те же выборки одним запросом на весь
+# курс; ключ словарей — student_id.
+
+
+def map_last_positions(student_ids: List[int]) -> dict:
+    """{student_id: (position, date, order_number)} — последняя должность."""
+    if not student_ids:
+        return {}
+    marks = ",".join("?" * len(student_ids))
+    rows = execute_query(
+        f"""SELECT student_id, position, date, order_number FROM (
+               SELECT student_id, position, date, order_number,
+                      ROW_NUMBER() OVER (PARTITION BY student_id
+                                         ORDER BY date DESC) AS rn
+               FROM position_history WHERE student_id IN ({marks})
+           ) WHERE rn = 1""",
+        tuple(student_ids), fetch=True) or []
+    return {r["student_id"]: (r["position"], r["date"], r["order_number"])
+            for r in rows}
+
+
+def map_last_ranks(student_ids: List[int]) -> dict:
+    """{student_id: rank} — последнее воинское звание."""
+    if not student_ids:
+        return {}
+    marks = ",".join("?" * len(student_ids))
+    rows = execute_query(
+        f"""SELECT student_id, rank FROM (
+               SELECT student_id, rank,
+                      ROW_NUMBER() OVER (PARTITION BY student_id
+                                         ORDER BY date DESC) AS rn
+               FROM rank_history WHERE student_id IN ({marks})
+           ) WHERE rn = 1""",
+        tuple(student_ids), fetch=True) or []
+    return {r["student_id"]: r["rank"] for r in rows}
+
+
+def map_penalties_in_period(student_ids: List[int],
+                            start_date: str, end_date: str) -> dict:
+    """{student_id: [(penalty_type, issued_by, date), ...]} за период."""
+    if not student_ids:
+        return {}
+    marks = ",".join("?" * len(student_ids))
+    rows = execute_query(
+        f"""SELECT student_id, penalty_type, issued_by, date FROM penalties
+            WHERE student_id IN ({marks}) AND date BETWEEN ? AND ?""",
+        (*student_ids, start_date, end_date), fetch=True) or []
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["student_id"], []).append(
+            (r["penalty_type"], r["issued_by"], r["date"]))
+    return out
+
+
+def map_failed_subjects(student_ids: List[int]) -> set:
+    """Множество student_id, у которых есть провальный последний результат."""
+    if not student_ids:
+        return set()
+    marks = ",".join("?" * len(student_ids))
+    rows = execute_query(
+        f"""SELECT DISTINCT student_id FROM (
+               SELECT student_id, grade, allowance, attendance,
+                      ROW_NUMBER() OVER (PARTITION BY student_id, subject
+                                         ORDER BY date DESC) AS rn
+               FROM session_results WHERE student_id IN ({marks})
+           ) WHERE rn = 1 AND (allowance = 'Не допущен'
+                              OR attendance = 'Отсутствовал' OR grade = '2')""",
+        tuple(student_ids), fetch=True) or []
+    return {r["student_id"] for r in rows}
+
+
+def map_latest_session_results(student_ids: List[int],
+                               semester: str) -> dict:
+    """{student_id: [(subject, grade, allowance, attendance), ...]} за семестр."""
+    if not student_ids:
+        return {}
+    marks = ",".join("?" * len(student_ids))
+    rows = execute_query(
+        f"""SELECT student_id, subject, grade, allowance, attendance FROM (
+               SELECT student_id, subject, grade, allowance, attendance,
+                      ROW_NUMBER() OVER (PARTITION BY student_id, subject
+                                         ORDER BY date DESC) AS rn
+               FROM session_results
+               WHERE student_id IN ({marks}) AND semester = ?
+           ) WHERE rn = 1""",
+        (*student_ids, semester), fetch=True) or []
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["student_id"], []).append(
+            (r["subject"], r["grade"], r["allowance"], r["attendance"]))
+    return out
+
+
 # ---------- Личное дело (PersonalFilePage) ----------
 
 
