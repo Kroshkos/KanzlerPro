@@ -23,7 +23,6 @@ import authz
 import pytest
 from constants import ADMIN_ROLE, DEFAULT_ROLE
 
-
 # ---------- стабы окружения Flet (без рендера) ----------
 
 class _FakeStore:
