@@ -128,13 +128,19 @@ def check_photos():
       при этом остаётся валидной).
     """
     try:
+        import photo_storage
         from photo_storage import legacy_base64_count, photo_path
     except ImportError as e:  # pragma: no cover
         _check_line("Хранилище фото", False, f"модуль недоступен: {e}")
         return ["photos-module"]
 
     problems = []
-    from config import DB_PATH, PHOTOS_DIR
+    from config import DB_PATH
+
+    # Каталог фото резолвим через photo_storage._photos_dir(): он учитывает
+    # подмену пути (тесты/перезагрузка config), тогда как статический импорт
+    # config.PHOTOS_DIR давал рассинхрон doctor ↔ photo_storage.
+    PHOTOS_DIR = photo_storage._photos_dir()
 
     writable = os.access(PHOTOS_DIR, os.W_OK) if os.path.isdir(PHOTOS_DIR) else False
     if not _check_line("PHOTOS_DIR (запись)", writable or not os.path.isfile(DB_PATH),

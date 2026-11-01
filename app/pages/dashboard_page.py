@@ -117,6 +117,29 @@ class DashboardPage(ft.Column):
                                 on_click=lambda e: self.open("LogsPage")),
             ])
 
+        # ---------- Аналитика по группам (F-4, лёгкая визуализация) ----------
+        group_rows = []
+        gstats = stats.get("by_group") or []
+        max_gpts = max(((r["pts"] or 0) for r in gstats), default=0) or 1
+        for r in gstats[:8]:
+            frac = (r["pts"] or 0) / max_gpts
+            group_rows.append(ft.Column([
+                ft.Row([ft.Text(f"{r['o_group_name'] or '—'} "
+                               f"(курс {r['o_course'] or '—'})",
+                               size=12, color=TEXT_DARK, expand=True),
+                        ft.Text(str(r["pts"] or 0), size=12, weight="bold",
+                                color=VIOLET)]),
+                ft.ProgressBar(value=frac, color=VIOLET, bgcolor="#e2e8f0",
+                               bar_height=8),
+            ], spacing=2))
+        if not group_rows:
+            group_rows.append(ft.Text("Нет данных: баллы по группам появятся "
+                                      "после экспертизы.", color=TEXT_MUTED,
+                                      italic=True))
+        groups_card = card(ft.Column(
+            [section_title("Рейтинг по группам"), *group_rows],
+            spacing=12), expand=True)
+
         # ---------- Топ студентов ----------
         top_rows = []
         if stats["top"]:
