@@ -90,6 +90,33 @@ class PersonalFilePage(ft.Column):
             f"Личное дело сохранено в PDF: {os.path.basename(path)}"))
         self._safe_update()
 
+    def export_personal_file_docx(self, e=None):
+        """Экспорт личного дела в DOCX (BACKLOG F-1) + диалог сохранения."""
+        sid = to_int(getattr(self, "selected_student_id", None))
+        if sid is None:
+            show_snack(self._page, ft.Text("Сначала выберите курсанта."))
+            return
+        try:
+            from docx_export import generate_personal_file_docx
+            path = generate_personal_file_docx(sid)
+        except Exception as err:
+            show_snack(self._page, ft.Text(f"Ошибка формирования DOCX: {err}"))
+            return
+        log_action(session_username(self._page),
+                   f"Экспорт личного дела (DOCX): student_id={sid}")
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            self._ensure_picker().save_file(
+                dialog_title="Сохранить личное дело (DOCX)",
+                file_name=os.path.basename(path),
+                src_bytes=data)
+        except Exception:
+            log_except("personal_file_page: save_file DOCX")
+        show_snack(self._page, ft.Text(
+            f"Личное дело сохранено в DOCX: {os.path.basename(path)}"))
+        self._safe_update()
+
     def _safe_update(self):
         try:
             self._page.update()
@@ -161,6 +188,11 @@ class PersonalFilePage(ft.Column):
             "Пакетная печать дел", icon=ft.Icons.COLLECTIONS,
             on_click=self.batch_print_open)
 
+        # Экспорт личного дела в DOCX (BACKLOG F-1)
+        self.export_docx_button = ft.OutlinedButton(
+            "Экспорт в DOCX", icon=ft.Icons.DESCRIPTION,
+            on_click=self.export_personal_file_docx)
+
         # Определяем порядок элементов, как в примере
         self.controls = [
             ft.Text("Личное дело курсанта", size=20, weight="bold"),
@@ -168,8 +200,9 @@ class PersonalFilePage(ft.Column):
             self.student_dropdown,
             ft.Divider(),  # Добавляем разделитель
             self.student_info_container,
-            ft.Row([self.print_pdf_button, self.batch_toggle_button,
-                             self.back_button], spacing=12),
+            ft.Row([self.print_pdf_button, self.export_docx_button,
+                    self.batch_toggle_button,
+                    self.back_button], spacing=12),
             self.batch_panel,
         ]
 

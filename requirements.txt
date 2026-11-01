@@ -3,5 +3,7 @@ flet==1.0.5
 pandas==2.3.1
 openpyxl==3.1.5
 reportlab>=4.2,<5
+python-docx>=1.1        # экспорт DOCX (BACKLOG F-1/F-2, app/docx_export.py)
+python-dotenv>=1.0      # секреты из .env (BACKLOG B-4, app/config.py)
 
 # --- Dev/test (устанавливать отдельно: pip install -r requirements-dev.txt) ---

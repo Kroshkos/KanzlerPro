@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+.env
+.env.local
+.coverage
+.pytest_cache/
+.ruff_cache/
+data/backups/
+data/kanzler_pro.db*
+data/photos/
+data/reports/

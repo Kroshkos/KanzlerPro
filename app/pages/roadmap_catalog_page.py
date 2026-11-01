@@ -4,6 +4,8 @@
 а также импортировать справочник из CSV-файла.
 """
 
+import os
+
 import flet as ft
 from access import PermissionDeniedError
 from database import (
@@ -173,3 +175,25 @@ class RoadmapCatalogPage(ft.Column):
         except Exception as ex:
             self.counter.value = f"Ошибка импорта: {ex}"
             self._page.update()
+
+    # --- Импорт курсантов из XLSX (BACKLOG F-5) ----------------------------
+    def import_students_xlsx(self, path: str) -> str:
+        """Двухшаговый импорт: разбор+валидация, затем транзакционная вставка.
+
+        Возвращает человекочитаемый отчёт; бросает PermissionDeniedError
+        (роль из сессии — B-1) и ValueError (битый файл/заголовки).
+        Строки с ошибками в БД не попадают; если валидных нет — 0 вставок.
+        """
+        from xlsx_import import commit_import, parse_workbook
+
+        rows = parse_workbook(path)
+        valid = [r for r in rows if r.ok]
+        bad = [r for r in rows if not r.ok]
+        inserted = commit_import(
+            rows,
+            actor_role=session_get(self._page, "role"),
+            log_user=session_get(self._page, "username") or "system")
+        report = f"Импорт XLSX: добавлено {inserted}, строк с ошибками {len(bad)}"
+        log_action(session_get(self._page, "username"),
+                   f"{report} (файл: {os.path.basename(path)})")
+        return report
