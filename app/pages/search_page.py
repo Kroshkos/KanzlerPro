@@ -1,7 +1,7 @@
 import flet as ft
+import repositories as repo
 import ui_kit as k
 
-import repositories as repo
 from pages import shell
 
 # Поля, доступные для расширенного поиска (единый список вместо 17 if/elif)

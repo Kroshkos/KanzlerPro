@@ -1099,15 +1099,9 @@ def add_student(student_data, actor_role=None):
 STUDENTS_PAGE_SIZE = 50
 
 
-def count_students():
-    """Общее число курсантов (для расчёта количества страниц пагинации)."""
-    row = execute_query("SELECT COUNT(*) AS c FROM students", fetch=True)
-    return int(row[0]["c"]) if row else 0
-
-
 def count_students() -> int:
     """Всего курсантов в базе (для расчёта числа страниц пагинации, C-1)."""
-    rows = execute_query("SELECT COUNT(*) c FROM students", fetch=True)
+    rows = execute_query("SELECT COUNT(*) AS c FROM students", fetch=True)
     return int(rows[0]["c"]) if rows else 0
 
 
