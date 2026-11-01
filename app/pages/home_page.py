@@ -180,6 +180,20 @@ class KantslerApp(ft.Column):
         w = self._page_width()
         return max(w - self._panel_width() - 2, 320)
 
+    def _apply_layout(self):
+        """Пересчитывает ширину панели и области контента (все числа — int)."""
+        pw = self._panel_width()
+        changed = False
+        if pw != self.nav_panel.width:
+            self.nav_panel.width = int(pw)
+            self._build_nav()
+            changed = True
+        cw = self._content_width()
+        if cw != self._content_col.width:
+            self._content_col.width = int(cw)
+            changed = True
+        return changed
+
     def _on_resize(self, e):
         # ВАЖНО: page.width/page.height в Flet 1.x — read-only поля, их
         # заполняет рантайм. Присваивать им нельзя (в том числе значения из
@@ -187,44 +201,28 @@ class KantslerApp(ft.Column):
         # метрик страницы; если они ещё не получены — из события (тоже с
         # безопасным приведением строки к числу).
         try:
-            pw = to_num(getattr(self._fpage, "width", None), None)
-            if pw is None or pw <= 0:
-                pw = to_num(getattr(e, "width", None), None)
-            if pw and pw > 0:
+            pw = to_num(getattr(e, "width", None), None)
+            if pw is not None and pw > 0:
                 self._last_width = float(pw)
-            ph = to_num(getattr(self._fpage, "height", None), None)
-            if ph is None or ph <= 0:
-                ph = to_num(getattr(e, "height", None), None)
-            if ph and ph > 0:
+            ph = to_num(getattr(e, "height", None), None)
+            if ph is not None and ph > 0:
                 self._last_height = float(ph)
         except Exception:
             pass
-        mode = self._sidebar_mode()
-        pw = self._panel_width()
-        if pw != self.nav_panel.width:
-            self.nav_panel.width = pw
-            self._build_nav()
-        cw = self._content_width()
-        if cw != self._content_col.width:
-            self._content_col.width = cw
-        self._fpage.update()
+        if self._apply_layout():
+            self._fpage.update()
 
     def toggle_sidebar(self, e=None):
         """Переключение полной/компактной панели (мобильный — скрытие)."""
         mode = self._sidebar_mode()
         if mode == "full":
             self._forced = "compact"
-            self.nav_panel.width = self.WIDTH_COMPACT
         elif mode == "compact":
             self._forced = "full"
-            self.nav_panel.width = self.WIDTH_SIDEBAR
         else:
             self._forced = "compact"
-            self.nav_panel.width = self.WIDTH_COMPACT
-        panel_w = int(self._num(self.nav_panel.width, self.WIDTH_COMPACT))
-        self._content_col.width = max(self._page_width() - panel_w - 2, 320)
-        self._build_nav()
-        self._fpage.update()
+        if self._apply_layout():
+            self._fpage.update()
 
     # ------------------------------------------------------------------
     # Построение панели навигации
@@ -267,9 +265,17 @@ class KantslerApp(ft.Column):
             )
             if active:
                 btn.bgcolor = "rgba(59,130,246,0.12)"
-                btn.content.controls[0].color = PRIMARY
-                btn.content.controls[-1].weight = "bold"
-                btn.content.controls[-1].color = PRIMARY
+                first = btn.content.controls[0]
+                last = btn.content.controls[-1]
+                # ВАЖНО: у ft.Icon поле weight — числовое (вес шрифта),
+                # строка "bold" роняет валидатор Flet 1.x с ошибкой
+                # "'<=' not supported between instances of 'str' and 'float'".
+                # Жирность задаём только текстовым элементам.
+                if isinstance(first, ft.Icon):
+                    first.color = PRIMARY
+                if isinstance(last, ft.Text):
+                    last.weight = "bold"
+                    last.color = PRIMARY
             self._nav_buttons[key] = btn
             children.append(btn)
 
