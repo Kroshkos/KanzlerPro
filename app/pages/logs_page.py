@@ -14,7 +14,7 @@ import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
 from pages import shell
-from utils import session_get, session_set, session_clear, show_snack
+from utils import session_get, session_set, session_clear, show_snack, to_int, to_num
 
 
 class LogsPage(ft.Column):
@@ -102,7 +102,7 @@ class LogsPage(ft.Column):
         # Ограничение количества строк
         rows_limit = self.rows_dropdown.value
         if rows_limit != "Все строки":
-            logs = logs[:int(rows_limit)]
+            logs = logs[:to_int(rows_limit, len(logs))]
 
         # Заполняем таблицу
         for log in logs:

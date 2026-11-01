@@ -83,3 +83,28 @@ def show_snack(page: ft.Page, message):
     page.overlay.append(snack)
     snack.open = True
     page.update()
+
+
+# ---------------------------------------------------------------------------
+# Безопасные преобразования значений.
+# В Flet 1.x значения из протокола (размеры окна, e.control.data и т.п.)
+# могут приходить как строки — прямое сравнение str с числом или int()/float()
+# от «грязного» значения роняет приложение. Все эти хелперы устойчивы к
+# строкам, запятому как десятичному разделителю и пустым значениям.
+# ---------------------------------------------------------------------------
+def to_num(value, default=None):
+    """Любое значение -> float (или default). Принимает строки '1920.5', '3,14'."""
+    try:
+        if value is None or value == "":
+            return default
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return default
+
+
+def to_int(value, default=None):
+    """Любое значение -> int (или default). Строки, float, None — безопасно."""
+    n = to_num(value, None)
+    if n is None:
+        return default
+    return int(n)

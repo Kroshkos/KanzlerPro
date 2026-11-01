@@ -12,7 +12,7 @@ from database import (get_achievements, add_achievement, delete_achievement,
 from pages.registry import get_page
 from pages import shell
 from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED, card, page_header
-from utils import session_get
+from utils import session_get, to_int, to_num
 
 
 class RoadmapCatalogPage(ft.Column):
@@ -127,7 +127,7 @@ class RoadmapCatalogPage(ft.Column):
             if not self.f_id.value or not self.f_name.value:
                 raise ValueError("Заполните ID и название")
             add_achievement(self.f_id.value.strip(), self.f_block.value,
-                            self.f_name.value.strip(), int(self.f_points.value or 0),
+                            self.f_name.value.strip(), to_int(self.f_points.value, 0),
                             self.f_version.value or "", self.f_calc.value)
             user = session_get(self._page, "username")
             log_action(user, f"Справочник: сохранено достижение {self.f_id.value}")

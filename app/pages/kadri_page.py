@@ -14,7 +14,7 @@ import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
 from pages import shell
-from utils import session_get, session_set, session_clear, show_snack
+from utils import session_get, session_set, session_clear, show_snack, to_int, to_num
 
 
 class KadriWorkPage(ft.Column):
@@ -979,7 +979,7 @@ class AddStudentPage(ft.Column):
             self._page.update()
 
     def save_click(self, e):
-        self.da_summary_score = f"{int(self.da_score_chemistry.value) + int(self.da_score_biology.value) + int(self.da_score_rusian.value) + int(self.da_score_fp.value)}"
+        self.da_summary_score = f"{(to_int(self.da_score_chemistry.value, 0) + to_int(self.da_score_biology.value, 0) + to_int(self.da_score_rusian.value, 0) + to_int(self.da_score_fp.value, 0))}"
         def format_date(date_str):
             if not date_str:  # Если дата не указана, возвращаем None
                 return None
@@ -1078,7 +1078,7 @@ class AddStudentPage(ft.Column):
                 "da_score_biology": self.da_score_biology.value,
                 "da_score_rusian": self.da_score_rusian.value,
                 "da_score_fp": self.da_score_fp.value,
-                "da_summary_score": f"{int(self.da_score_chemistry.value) + int(self.da_score_biology.value) + int(self.da_score_rusian.value) + int(self.da_score_fp.value)}",
+                "da_summary_score": f"{(to_int(self.da_score_chemistry.value, 0) + to_int(self.da_score_biology.value, 0) + to_int(self.da_score_rusian.value, 0) + to_int(self.da_score_fp.value, 0))}",
                 "da_group_number": self.da_group_number.value,
                 "da_score_diploma": self.da_score_diploma.value,
                 "da_additional_education": self.da_additional_education.value,

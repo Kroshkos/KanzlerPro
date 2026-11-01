@@ -16,7 +16,7 @@ from database import (search_students_by_name_part, get_individual_plan,
 from pages.registry import get_page
 from pages import shell
 from theme import BG, PRIMARY, SUCCESS, TEXT_DARK, TEXT_MUTED, card, page_header
-from utils import session_get, show_snack
+from utils import session_get, show_snack, to_int, to_num
 
 
 IPR_STATUS_LABELS = {
@@ -116,13 +116,13 @@ class RoadmapIprPage(ft.Column):
 
     def _student_id(self):
         try:
-            return int(self.student_dd.value)
+            return to_int(self.student_dd.value)
         except (TypeError, ValueError):
             return None
 
     def _semester(self):
         try:
-            return int(self.semester_dd.value or 1)
+            return to_int(self.semester_dd.value, 1)
         except ValueError:
             return 1
 
@@ -185,7 +185,7 @@ class RoadmapIprPage(ft.Column):
         avg_raw = (self.avg_field.value or "").replace(",", ".").strip()
         if avg_raw:
             try:
-                set_semester_average(sid, sem, float(avg_raw))
+                set_semester_average(sid, sem, to_num(avg_raw))
             except ValueError:
                 show_snack(self._page, "Средний балл должен быть числом")
                 return
@@ -218,11 +218,11 @@ class RoadmapIprPage(ft.Column):
             show_snack(self._page, "Выберите блок достижений")
             return
         try:
-            score = int(float((self.score_field.value or "0").replace(",", ".")))
+            score = to_int(self.score_field.value, 0)
         except ValueError:
             show_snack(self._page, "Баллы должны быть числом")
             return
-        add_manual_score(sid, self._semester(), int(self.block_dd.value),
+        add_manual_score(sid, self._semester(), to_int(self.block_dd.value),
                          score, self.comment_field.value or "")
         log_action(self.username, f"ИПР: ручной балл {score} для студента {sid}")
         self.score_field.value = "0"

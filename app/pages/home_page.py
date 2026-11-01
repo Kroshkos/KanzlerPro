@@ -18,7 +18,7 @@ import flet as ft
 from pages.registry import get_page
 from pages import shell
 from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED
-from utils import session_get, session_clear
+from utils import session_get, session_clear, to_num
 from database import log_action
 
 
@@ -145,12 +145,8 @@ class KantslerApp(ft.Column):
     # ------------------------------------------------------------------
     @staticmethod
     def _num(value, default=None):
-        try:
-            if value is None or value == "":
-                return default
-            return float(str(value).replace(",", "."))
-        except (TypeError, ValueError):
-            return default
+        # общий хелпер из app/utils.py (to_num) — единая реализация на весь проект
+        return to_num(value, default)
 
     def _page_width(self):
         return int(self._num(getattr(self._fpage, "width", None), 1200) or 1200)

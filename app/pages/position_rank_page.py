@@ -14,7 +14,7 @@ import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
 from pages import shell
-from utils import session_get, session_set, session_clear, show_snack
+from utils import session_get, session_set, session_clear, show_snack, to_int
 
 
 class PositionChangePage(ft.Column):
@@ -131,7 +131,7 @@ class PositionChangePage(ft.Column):
         # Получаем выбранного курсанта из выпадающего списка
         selected_student_key = self.student_dropdown.value
         if selected_student_key:
-            self.selected_student_id = int(selected_student_key)
+            self.selected_student_id = to_int(selected_student_key)
             # Обновляем поле ввода текстом выбранного курсанта
             selected_student_text = next(
                 option.text for option in self.student_dropdown.options
@@ -336,7 +336,7 @@ class RankChangePage(ft.Column):
         # Получаем выбранного курсанта из выпадающего списка
         selected_student_key = self.student_dropdown.value
         if selected_student_key:
-            self.selected_student_id = int(selected_student_key)
+            self.selected_student_id = to_int(selected_student_key)
             # Обновляем поле ввода текстом выбранного курсанта
             selected_student_text = next(
                 option.text for option in self.student_dropdown.options

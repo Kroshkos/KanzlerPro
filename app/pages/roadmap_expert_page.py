@@ -13,7 +13,7 @@ from database import (get_reviews, add_review, update_review, delete_review,
 from pages.registry import get_page
 from pages import shell
 from theme import BG, TEXT_DARK, TEXT_MUTED, card, page_header, status_chip
-from utils import session_get
+from utils import session_get, to_int, to_num
 
 
 class RoadmapExpertPage(ft.Column):
@@ -122,8 +122,8 @@ class RoadmapExpertPage(ft.Column):
 
     def _f(self, tf, default=1.0):
         try:
-            return float((tf.value or "").replace(",", "."))
-        except ValueError:
+            return to_num(tf.value, default)
+        except (TypeError, ValueError):
             return default
 
     def calc_preview(self, points, calc_type):
@@ -148,7 +148,7 @@ class RoadmapExpertPage(ft.Column):
         points = ach["points"] if ach else 0
         self.calc_preview(points, calc_type)
         try:
-            semester = int(self.semester_field.value or 1)
+            semester = to_int(self.semester_field.value, 1)
         except ValueError:
             semester = 1
         add_review(int(sid), aid, semester, status="pending")

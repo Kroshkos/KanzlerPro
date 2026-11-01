@@ -14,7 +14,7 @@ import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
 from pages import shell
-from utils import session_get, session_set, session_clear, show_snack
+from utils import session_get, session_set, session_clear, show_snack, to_int
 
 
 class UsersPage(ft.Column):
@@ -114,7 +114,7 @@ class UsersPage(ft.Column):
 
     def change_password_click(self, e):
         """Смена пароля: новый пароль хешируется перед сохранением."""
-        user_id = int(e.control.data)
+        user_id = to_int(e.control.data)
         target = get_user_by_id(user_id)
         if not target:
             return
@@ -130,7 +130,7 @@ class UsersPage(ft.Column):
         self._page.update()
 
     def change_role_click(self, e):
-        user_id = int(e.control.data)
+        user_id = to_int(e.control.data)
         target = get_user_by_id(user_id)
         if not target:
             return
@@ -154,7 +154,7 @@ class UsersPage(ft.Column):
         self._page.update()
 
     def delete_user_click(self, e):
-        user_id = int(e.control.data)
+        user_id = to_int(e.control.data)
         # Повторная серверная проверка прав (UI может быть обойдён)
         if user_id == session_get(self._page, "user_id"):
             show_snack(self._page, ft.Text("Нельзя удалить собственного пользователя"))
