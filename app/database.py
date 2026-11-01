@@ -854,6 +854,58 @@ def get_students():
     query = "SELECT id, o_surname, o_name, o_lastname, o_course, o_group_name FROM students"
     return execute_query(query, fetch=True)
 
+
+# --- Глобальный поиск: выборки всех записей с ФИО (для app/global_search.py).
+# Фильтрация по подстроке выполняется на стороне Python, т.к. SQLite LOWER()
+# не меняет регистр кириллицы.
+
+def search_all_encouragements():
+    query = """
+    SELECT e.id, e.encouragement_type AS kind, e.reason, e.date AS date_obj,
+           s.id AS student_id, s.o_surname, s.o_name
+    FROM encouragements e JOIN students s ON s.id = e.student_id
+    ORDER BY e.date DESC
+    """
+    return execute_query(query, fetch=True)
+
+
+def search_all_penalties():
+    query = """
+    SELECT p.id, p.penalty_type AS kind, p.reason, p.date AS date_obj,
+           s.id AS student_id, s.o_surname, s.o_name
+    FROM penalties p JOIN students s ON s.id = p.student_id
+    ORDER BY p.date DESC
+    """
+    return execute_query(query, fetch=True)
+
+
+def search_all_session_results():
+    query = """
+    SELECT sr.id, sr.subject, sr.type_exam, sr.grade, sr.date,
+           s.id AS student_id, s.o_surname, s.o_name
+    FROM session_results sr JOIN students s ON s.id = sr.student_id
+    ORDER BY sr.date DESC
+    """
+    return execute_query(query, fetch=True)
+
+
+def search_all_achievements():
+    query = ("SELECT id, block, name, points, version, calc_type "
+             "FROM achievements_catalog ORDER BY block, name")
+    return execute_query(query, fetch=True)
+
+
+def search_all_reviews():
+    query = ("SELECT r.id, r.student_id, s.o_surname, s.o_name, s.o_lastname, "
+             "s.o_group_name, r.achievement_id, a.name AS achievement_name, "
+             "r.status, r.semester, r.final_points "
+             "FROM roadmap_reviews r "
+             "JOIN students s ON s.id = r.student_id "
+             "LEFT JOIN achievements_catalog a ON a.id = r.achievement_id "
+             "ORDER BY r.id DESC")
+    return execute_query(query, fetch=True)
+
+
 # Добавление поощрения
 def add_encouragement(student_id, encouragement_type, reason, issued_by, date_obj, order_number):
     query = """
@@ -865,7 +917,7 @@ def add_encouragement(student_id, encouragement_type, reason, issued_by, date_ob
 # Получение всех поощерений для студента
 def get_encouragements_by_student(student_id):
     query = """
-    SELECT encouragement_type, reason, issued_by, date, order_number FROM encouragements
+    SELECT encouragement_type, reason, issued_by, date AS date_obj, order_number FROM encouragements
     WHERE student_id = ?
     """
     return execute_query(query, (student_id,), fetch=True)
@@ -881,7 +933,7 @@ def add_penalty(student_id, penalty_type, reason, date_reason, issued_by, date_o
 # Получение всех взысканий для студента
 def get_penalties_by_student(student_id):
     query = """
-    SELECT penalty_type, reason, date_reason, issued_by, date, order_number FROM penalties
+    SELECT penalty_type, reason, date_reason, issued_by, date AS date_obj, order_number FROM penalties
     WHERE student_id = ?
     """
     return execute_query(query, (student_id,), fetch=True)
@@ -1076,6 +1128,45 @@ def calculate_final_points(calc_type, base_points, k_ur=1.0, k_role=1.0,
     if calc_type == "month":
         total = total * max(int(duration_months or 0), 1)
     return int(round(total + int(ip_bonus or 0)))
+
+
+def count_pending_reviews():
+    """Число заявок на экспертизу Road Map в статусе 'на рассмотрении'."""
+    try:
+        rows = execute_query(
+            "SELECT COUNT(*) FROM roadmap_reviews WHERE status = 'pending'",
+            fetch=True)
+        return int(rows[0][0]) if rows else 0
+    except Exception:
+        return 0
+
+
+def get_recent_pending_reviews(limit=10):
+    """Последние новые заявки (для колокольчика уведомлений)."""
+    try:
+        return execute_query(
+            "SELECT r.id, r.student_id, s.o_surname, s.o_name, s.o_lastname, "
+            "       a.name, r.semester, r.created_at "
+            "FROM roadmap_reviews r "
+            "LEFT JOIN students s ON s.id = r.student_id "
+            "LEFT JOIN achievements_catalog a ON a.id = r.achievement_id "
+            "WHERE r.status = 'pending' "
+            "ORDER BY r.id DESC LIMIT ?",
+            (int(limit),), fetch=True) or []
+    except Exception:
+        # created_at может отсутствовать в старой схеме — упрощённый вариант
+        try:
+            return execute_query(
+                "SELECT r.id, r.student_id, s.o_surname, s.o_name, s.o_lastname, "
+                "       a.name, r.semester, NULL AS created_at "
+                "FROM roadmap_reviews r "
+                "LEFT JOIN students s ON s.id = r.student_id "
+                "LEFT JOIN achievements_catalog a ON a.id = r.achievement_id "
+                "WHERE r.status = 'pending' "
+                "ORDER BY r.id DESC LIMIT ?",
+                (int(limit),), fetch=True) or []
+        except Exception:
+            return []
 
 
 def add_review(student_id, achievement_id, semester, status="pending",

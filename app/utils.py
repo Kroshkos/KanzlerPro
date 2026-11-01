@@ -108,3 +108,21 @@ def to_int(value, default=None):
     if n is None:
         return default
     return int(n)
+
+
+def row_get(row, key, default=None):
+    """Безопасное чтение колонки из sqlite3.Row / dict по имени.
+
+    sqlite3.Row не поддерживает .get(), а KeyError при отсутствующей
+    колонке роняет on_click-хендлер — возвращаем default вместо падения.
+    """
+    if row is None:
+        return default
+    try:
+        keys = row.keys()
+    except AttributeError:
+        return row.get(key, default)  # обычный dict
+    if key not in keys:
+        return default
+    value = row[key]
+    return default if value is None else value

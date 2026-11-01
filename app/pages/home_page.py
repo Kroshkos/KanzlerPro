@@ -18,7 +18,7 @@ import flet as ft
 from pages.registry import get_page
 from pages import shell
 from theme import BG, PRIMARY, TEXT_DARK, TEXT_MUTED
-from utils import session_get, session_clear, to_num
+from utils import session_get, session_clear, to_num, to_int
 from database import log_action
 
 
@@ -89,6 +89,24 @@ class KantslerApp(ft.Column):
         self._title_ref = ft.Text("Дашборд", size=18, weight="bold",
                                   color=TEXT_DARK)
         self._subtitle_ref = ft.Text("", size=12, color=TEXT_MUTED)
+        # Глобальный поиск: курсанты / заявки Road Map / достижения
+        self._search_field = ft.TextField(
+            hint_text="Поиск: фамилия, группа, заявка…",
+            width=300, dense=True, border_radius=999,
+            prefix_icon=ft.Icons.SEARCH,
+            on_submit=self.global_search_click)
+        # ---------- Колокольчик уведомлений: новые заявки на экспертизу ----
+        self._notif_btn = ft.IconButton(
+            ft.Icons.NOTIFICATIONS_NONE, icon_color="#64748b",
+            tooltip="Уведомления: новые заявки на экспертизу",
+            on_click=self.notifications_click)
+        self._notif_badge = ft.Container(
+            content=ft.Text("0", size=9, color="#ffffff", weight="bold"),
+            bgcolor="#ef4444", border_radius=999,
+            padding=ft.Padding(4, 1, 4, 1), visible=False)
+        self._notif_stack = ft.Stack([self._notif_btn, self._notif_badge],
+                                     width=40, height=40)
+
         header = ft.Container(
             content=ft.Row([
                 ft.IconButton(ft.Icons.MENU_ROUNDED, icon_color=TEXT_DARK,
@@ -96,6 +114,12 @@ class KantslerApp(ft.Column):
                               on_click=self.toggle_sidebar),
                 ft.Column([self._title_ref, self._subtitle_ref], spacing=2),
                 ft.Container(expand=True),
+                self._search_field,
+                ft.IconButton(ft.Icons.SEARCH, icon_color=PRIMARY,
+                              tooltip="Глобальный поиск",
+                              on_click=self.global_search_click),
+                # Колокольчик уведомлений (собирается до header в _build_notifications)
+                self._notif_stack,
                 ft.CircleAvatar(
                     content=ft.Text(str(self.username)[:1].upper(),
                                     color="#ffffff", weight="bold"),
@@ -134,6 +158,7 @@ class KantslerApp(ft.Column):
         except Exception:
             pass
 
+        self.refresh_notifications()
         self.show_dashboard()
 
     # ------------------------------------------------------------------
@@ -334,6 +359,10 @@ class KantslerApp(ft.Column):
             self._title_ref.value = title
             self._subtitle_ref.value = ""
         self._build_nav()
+        try:
+            self.refresh_notifications()
+        except Exception:
+            pass
         self._fpage.update()
 
     def open_standalone(self, cls_name, view):
@@ -360,6 +389,154 @@ class KantslerApp(ft.Column):
 
     def show_dashboard(self):
         self.go_to("DashboardPage", key="dashboard", title="Дашборд")
+
+    def global_search_click(self, e=None):
+        """Глобальный поиск из шапки: курсанты + заявки Road Map + каталог."""
+        query = str(getattr(self._search_field, "value", "") or "").strip()
+        if len(query) < 2:
+            from utils import show_snack
+            show_snack(self._fpage, "Введите не менее 2 символов для поиска.")
+            return
+        try:
+            view = get_page("SearchResultsPage")(self._fpage, query,
+                                                 parent=self)
+        except TypeError:
+            view = get_page("SearchResultsPage")(self._fpage, query)
+        self.go_to("SearchResultsPage", view=view, key=None,
+                   title=f"Поиск: {query}")
+
+    # ------------------------------------------------------------------
+    # Уведомления о новых заявках на экспертизу (колокольчик в шапке)
+    # ------------------------------------------------------------------
+    def refresh_notifications(self):
+        """Пересчитывает счётчик заявок 'на рассмотрении' на бейдже."""
+        try:
+            from database import count_pending_reviews
+            pending = int(count_pending_reviews())
+        except Exception:
+            pending = 0
+        self._pending_reviews_count = pending
+        self._notif_badge.content.value = str(pending if pending < 100 else "99+")
+        self._notif_badge.visible = pending > 0
+        self._notif_btn.icon = (ft.Icons.NOTIFICATIONS_ACTIVE if pending > 0
+                                else ft.Icons.NOTIFICATIONS_NONE)
+        self._notif_btn.tooltip = (
+            f"Уведомления: новых заявок на экспертизу — {pending}"
+            if pending else "Новых заявок на экспертизу нет")
+
+    def notifications_click(self, e=None):
+        """Показывает панель последних неотработанных заявок."""
+        try:
+            from database import get_recent_pending_reviews
+            rows = get_recent_pending_reviews(limit=15) or []
+        except Exception:
+            rows = []
+        items = []
+        if not rows:
+            items.append(ft.Container(
+                padding=14,
+                content=ft.Text("Новых заявок на экспертизу нет ✨",
+                                size=13, color=TEXT_MUTED)))
+        for r in rows:
+            def _g(k):
+                try:
+                    v = r[k]
+                except Exception:
+                    v = None
+                return str(v).strip() if v not in (None, "") else "—"
+            fio = " ".join(x for x in [_g("o_surname"), _g("o_name"),
+                                       _g("o_lastname")] if x != "—") or "—"
+            sem = to_int(_g("semester"))
+            items.append(
+                ft.Container(
+                    ink=True,
+                    padding=ft.Padding(12, 8, 12, 8),
+                    border=ft.Border(bottom=ft.BorderSide(1, "#f1f5f9")),
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.FORWARD_TO_INBOX, size=18,
+                                color="#f59e0b"),
+                        ft.Column([
+                            ft.Text(fio, size=13, weight="bold",
+                                    color=TEXT_DARK, no_wrap=True),
+                            ft.Text(f"{_g('name')}"
+                                    + (f" · семестр {sem}" if sem else ""),
+                                    size=11.5, color=TEXT_MUTED,
+                                    no_wrap=True,
+                                    overflow=ft.TextOverflow.ELLIPSIS),
+                        ], spacing=2, expand=True),
+                    ]),
+                    on_click=lambda ev, sid=to_int(_g("student_id")):
+                        self.open_expert_for_student(sid),
+                ))
+        panel = ft.Container(
+            width=360,
+            bgcolor="#ffffff",
+            border=ft.Border.all(1, "#e2e8f0"),
+            border_radius=12,
+            shadow=ft.BoxShadow(blur_radius=18, color="#1f000000",
+                                 offset=ft.Offset(0, 6)),
+            content=ft.Column([
+                ft.Container(
+                    padding=ft.Padding(14, 12, 14, 10),
+                    border=ft.Border(bottom=ft.BorderSide(1, "#e2e8f0")),
+                    content=ft.Row([
+                        ft.Text("Уведомления", size=15, weight="bold",
+                                color=TEXT_DARK, expand=True),
+                        ft.IconButton(ft.Icons.CLOSE, icon_size=16,
+                                      icon_color="#64748b",
+                                      on_click=self.close_notifications),
+                    ])),
+                ft.Column(items, spacing=0, scroll=ft.ScrollMode.AUTO,
+                          height=min(430, 62 * max(len(items), 1) + 8)),
+                ft.Container(
+                    padding=ft.Padding(14, 8, 14, 12),
+                    content=ft.FilledButton(
+                        "Открыть все заявки", icon=ft.Icons.VERIFIED,
+                        on_click=lambda ev: self.go_to(
+                            "RoadmapExpertPage", key="expert",
+                            title="Экспертиза Road Map")),
+                ),
+            ], spacing=0))
+        self._notif_overlay = ft.Container(
+            content=panel, right=110, top=52,
+            bgcolor="#00000000")
+        # закрытие по клику мимо панели
+        closer = ft.GestureDetector(
+            on_tap=self.close_notifications,
+            content=ft.Container(bgcolor="#00000022"))
+        self._notif_overlay = ft.Stack([closer, panel])
+        try:
+            self._notif_overlay.expand = True
+            closer.expand = True
+        except Exception:
+            pass
+        holder = getattr(self, "_notif_holder", None)
+        if holder is None:
+            holder = ft.Container(visible=False, left=0, top=0, right=0, bottom=0,
+                               expand=True)
+            try:
+                self._fpage.overlay.append(holder)
+            except Exception:
+                pass
+            self._notif_holder = holder
+        holder.content = self._notif_overlay
+        holder.visible = True
+        holder.update()
+
+    def open_expert_for_student(self, student_id):
+        """Из уведомления — сразу к курсанту на страницу Экспертизы."""
+        self.close_notifications()
+        self.go_to("RoadmapExpertPage", key="expert", title="Экспертиза",
+                   keep_selection=student_id)
+
+    def close_notifications(self, e=None):
+        holder = getattr(self, "_notif_holder", None)
+        if holder is not None:
+            holder.visible = False
+            try:
+                holder.update()
+            except Exception:
+                pass
 
     def show_legacy_menu(self):
         """Совместимость: старое меню убрано — открываем дашборд."""

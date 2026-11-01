@@ -13,7 +13,7 @@ from database import (get_reviews, add_review, update_review, delete_review,
 from pages.registry import get_page
 from pages import shell
 from theme import BG, TEXT_DARK, TEXT_MUTED, card, page_header, status_chip
-from utils import session_get, to_int, to_num
+from utils import session_get, to_int, to_num, row_get
 
 
 class RoadmapExpertPage(ft.Column):
@@ -171,10 +171,10 @@ class RoadmapExpertPage(ft.Column):
                 decision_cells.append(ft.IconButton(
                     ft.Icons.CHECK_CIRCLE, icon_color="green",
                     tooltip="Одобрить",
-                    on_click=lambda ev, rid=r["id"], k=r.get("k_ur", 1.0),
-                            kr=r.get("k_role", 1.0), kv=r.get("k_vn", 1.0),
-                            ks=r.get("k_st", 1.0), d=r.get("duration_months", 0),
-                            g=r.get("grant_amount", 0), ib=r.get("ip_bonus", 0),
+                    on_click=lambda ev, rid=r["id"], k=row_get(r, "k_ur", 1.0),
+                            kr=row_get(r, "k_role", 1.0), kv=row_get(r, "k_vn", 1.0),
+                            ks=row_get(r, "k_st", 1.0), d=row_get(r, "duration_months", 0),
+                            g=row_get(r, "grant_amount", 0), ib=row_get(r, "ip_bonus", 0),
                             aid=r["achievement_id"]:
                         self.approve(rid, aid, k, kr, kv, ks, d, g, ib)))
                 decision_cells.append(ft.IconButton(

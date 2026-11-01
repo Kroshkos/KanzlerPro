@@ -38,6 +38,8 @@ PAGE_MODULES = {
     "RoadmapIprPage": "pages.roadmap_ipr_page",
     "RoadmapRatingPage": "pages.roadmap_rating_page",
     "RoadmapReportsPage": "pages.roadmap_reports_page",
+    # --- Глобальный поиск из шапки ---
+    "SearchResultsPage": "pages.search_results_page",
 }
 
 # Имена классов, заполняется пакетом pages.__init__ (или лениво в get_page).

@@ -99,8 +99,12 @@ class AddStudentPage(ft.Column):
         self.photo_picker = ft.FilePicker(on_result=self.handle_photo_upload)
         # Файловый диалог живёт в overlay страницы; добавляем ровно один раз
         # (страница может пересоздаваться при навигации).
-        if self.photo_picker not in self._page.overlay:
-            self._page.overlay.append(self.photo_picker)
+        try:
+            ov = list(self._page.overlay)
+            if not any(isinstance(c, ft.FilePicker) for c in ov):
+                self._page.overlay.append(self.photo_picker)
+        except Exception:
+            pass  # overlay недоступен (не-рантайм страница) — диалог не критичен
 
         self.photo_base64 = DEFAULT_PHOTO_BASE64  # Используем Base64 для изображения по умолчанию
 

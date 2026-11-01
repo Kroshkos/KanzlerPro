@@ -14,7 +14,11 @@ import repositories as repo
 from constants import ROLES, ADMIN_ROLE, DEFAULT_ROLE, EDITABLE_STUDENT_FIELDS
 from pages.registry import get_page
 from pages import shell
-from utils import show_snack, to_int
+from utils import show_snack, to_int, session_get
+
+
+def session_username(page_obj):
+    return session_get(page_obj, "username") or "system"
 
 
 class PersonalFilePage(ft.Column):
@@ -27,6 +31,68 @@ class PersonalFilePage(ft.Column):
             sh.open_standalone(type(control).__name__, control)
             return None
         return control
+
+    def _ensure_picker(self):
+        """Лениво создаёт FilePicker в overlay страницы (один раз)."""
+        picker = getattr(self, "_pdf_picker", None)
+        if picker is not None:
+            return picker
+        picker = ft.FilePicker()
+        try:
+            if picker not in self._page.overlay:
+                self._page.overlay.append(picker)
+        except Exception:
+            pass
+        self._pdf_picker = picker
+        return picker
+
+    def print_personal_file_pdf(self, e=None):
+        """Печатает личное дело курсанта в PDF (шаблон Road Map) и
+        открывает диалог сохранения файла."""
+        sid = to_int(getattr(self, "selected_student_id", None))
+        if sid is None:
+            show_snack(self._page, ft.Text("Сначала выберите курсанта."))
+            return
+        try:
+            from personal_file_pdf import generate_personal_file_pdf
+            path = generate_personal_file_pdf(sid)
+        except RuntimeError as err:      # reportlab не установлен
+            show_snack(self._page, ft.Text(str(err)))
+            return
+        except Exception as err:
+            show_snack(self._page, ft.Text(f"Ошибка формирования PDF: {err}"))
+            return
+        log_action(session_username(self._page),
+                   f"Печать личного дела (PDF): student_id={sid}")
+        # Десктоп: открыть стандартной программой + предложить сохранить.
+        try:
+            import subprocess, sys
+            if sys.platform == "win32":
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception:
+            pass
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            self._ensure_picker().save_file(
+                dialog_title="Сохранить личное дело (PDF)",
+                file_name=os.path.basename(path),
+                src_bytes=data)
+        except Exception:
+            pass
+        show_snack(self._page, ft.Text(
+            f"Личное дело сохранено в PDF: {os.path.basename(path)}"))
+        self._safe_update()
+
+    def _safe_update(self):
+        try:
+            self._page.update()
+        except Exception:
+            pass
 
     def __init__(self, page, parent=None):
         super().__init__(scroll=ft.ScrollMode.AUTO)
@@ -53,6 +119,46 @@ class PersonalFilePage(ft.Column):
         # Кнопка для возврата на главную страницу
         self.back_button = ft.FilledButton("Назад", on_click=self.back_click)
 
+        # Печать личного дела в PDF (шаблон Road Map)
+        self.print_pdf_button = ft.FilledButton(
+            "Печать личного дела (PDF)", icon=ft.Icons.PRINT,
+            on_click=self.print_personal_file_pdf)
+
+        # Пакетная печать: несколько личных дел одним PDF
+        self.batch_ids = []                      # student_id -> Checkbox
+        self.batch_checkboxes = {}
+        self.batch_list_col = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO,
+                                        height=300, visible=False, width=560)
+        self.batch_panel = ft.Container(
+            visible=False, width=580, padding=14, bgcolor="#ffffff",
+            border=ft.Border.all(1, "#e2e8f0"), border_radius=12,
+            content=ft.Column([
+                ft.Text("Пакетная печать личных дел (один PDF)", size=15,
+                        weight="bold"),
+                ft.Row([
+                    ft.TextField(label="Группа (фильтр)", width=200,
+                                 hint_text="напр. 1 рота",
+                                 on_change=self._batch_filter_changed),
+                    ft.TextField(label="Курс (фильтр)", width=120,
+                                 hint_text="напр. 2",
+                                 on_change=self._batch_filter_changed),
+                    ft.Text("", size=12, color="#64748b"),
+                ], spacing=10),
+                ft.Container(
+                    content=self.batch_list_col,
+                    clip_behavior=ft.ClipBehavior.ANTI_ALIAS),
+                ft.Row([
+                    ft.FilledButton("Сформировать PDF", icon=ft.Icons.PRINT,
+                                    on_click=self.batch_print_confirm),
+                    ft.TextButton("Отмена", on_click=self.batch_print_cancel),
+                ], spacing=10)
+            ], spacing=12),
+        )
+
+        self.batch_toggle_button = ft.OutlinedButton(
+            "Пакетная печать дел", icon=ft.Icons.COLLECTIONS,
+            on_click=self.batch_print_open)
+
         # Определяем порядок элементов, как в примере
         self.controls = [
             ft.Text("Личное дело курсанта", size=20, weight="bold"),
@@ -60,7 +166,9 @@ class PersonalFilePage(ft.Column):
             self.student_dropdown,
             ft.Divider(),  # Добавляем разделитель
             self.student_info_container,
-            self.back_button
+            ft.Row([self.print_pdf_button, self.batch_toggle_button,
+                             self.back_button], spacing=12),
+            self.batch_panel,
         ]
 
         # Переменная для хранения выбранного курсанта
@@ -373,6 +481,112 @@ class PersonalFilePage(ft.Column):
             sh.open_standalone(type(control).__name__, control)
             return None
         return control
+
+
+
+    # ==================================================================
+    # Пакетная печать личных дел — несколько курсантов одним PDF
+    # ==================================================================
+    def _batch_all_students(self):
+        """Список (id, фио, группа, курс) всех курсантов."""
+        try:
+            from database import get_students
+            rows = get_students() or []
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            try:
+                sid = to_int(r["id"])
+                if sid is None:
+                    continue
+                fio = " ".join(str(x).strip() for x in
+                               (r["o_surname"], r["o_name"], r["o_lastname"])
+                               if x not in (None, ""))
+                out.append((sid, fio, str(r["o_group_name"] or ""),
+                            str(r["o_course"] or "")))
+            except Exception:
+                continue
+        return out
+
+    def batch_print_open(self, e=None):
+        self.batch_panel.visible = True
+        self._batch_filter_changed(None)
+        self._safe_update()
+
+    def batch_print_cancel(self, e=None):
+        self.batch_panel.visible = False
+        self._safe_update()
+
+    def _batch_filter_changed(self, e):
+        """Пересобирает список чекбоксов по фильтрам группа/курс."""
+        try:
+            grp = (self.batch_panel.content.controls[1].controls[0].value or "").strip().lower()
+            crs = (self.batch_panel.content.controls[1].controls[1].value or "").strip().lower()
+        except Exception:
+            grp = crs = ""
+        col = self.batch_list_col
+        col.controls.clear()
+        self.batch_checkboxes = {}
+        count = 0
+        for sid, fio, group, course in self._batch_all_students():
+            if grp and grp not in group.lower():
+                continue
+            if crs and crs != course.lower():
+                continue
+            cb = ft.Checkbox(label=f"{fio}  ·  гр. {group or '—'} · {course}-й курс",
+                             value=False)
+            self.batch_checkboxes[sid] = cb
+            col.controls.append(cb)
+            count += 1
+        col.visible = True
+        counter = self.batch_panel.content.controls[1].controls[2]
+        try:
+            counter.value = f"Найдено: {count}"
+        except Exception:
+            pass
+        self._safe_update()
+
+    def batch_print_confirm(self, e=None):
+        ids = [sid for sid, cb in self.batch_checkboxes.items() if cb.value]
+        if not ids:
+            show_snack(self._page, ft.Text("Отметьте хотя бы одного курсанта."))
+            return
+        try:
+            from personal_file_pdf import generate_batch_personal_files_pdf
+            path = generate_batch_personal_files_pdf(ids)
+        except RuntimeError as err:
+            show_snack(self._page, ft.Text(str(err)))
+            return
+        except Exception as err:
+            show_snack(self._page, ft.Text(f"Ошибка пакетной печати: {err}"))
+            return
+        log_action(session_username(self._page),
+                   f"Пакетная печать личных дел (PDF): {len(ids)} шт.")
+        try:
+            import subprocess, sys
+            if sys.platform == "win32":
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception:
+            pass
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            self._ensure_picker().save_file(
+                dialog_title="Сохранить пакет личных дел (PDF)",
+                file_name=os.path.basename(path),
+                src_bytes=data)
+        except Exception:
+            pass
+        self.batch_panel.visible = False
+        show_snack(self._page, ft.Text(
+            f"Готово: {len(ids)} личныx дел в одном PDF "
+            f"({os.path.basename(path)})"))
+        self._safe_update()
 
 
     def back_click(self, e):
