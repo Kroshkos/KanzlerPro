@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from access import require_role
+from cache import invalidate as _cache_invalidate
 
 # Абсолютный путь к файлу базы данных (не зависит от текущей директории,
 # из которой запущено приложение — раньше БД «терялась» при запуске из другой папки)
@@ -55,8 +56,50 @@ def _lower_unicode(s):
 def connect_to_db():
     conn = sqlite3.connect(DB_PATH)  # Файл базы данных
     conn.execute("PRAGMA foreign_keys = ON")  # включаем контроль внешних ключей
+    # WAL (BACKLOG A-3): читатели и писатель не блокируют друг друга,
+    # а падение процесса не оставляет БД повреждённой (WAL-journal
+    # восстанавливается при следующем подключении). Ошибка PRAGMA не
+    # считается фатальной: на некоторых сетевых ФС WAL недоступен.
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.Error:
+        pass
     conn.create_function("LOWER_UNICODE", 1, _lower_unicode, deterministic=True)
     return conn
+
+
+def transaction():
+    """Контекстный менеджер короткоживущей транзакции (BACKLOG A-3).
+
+    Пакетные операции (импорт из CSV/XLSX, каскадное удаление) должны
+    выполняться атомарно: либо все строки записаны, либо ни одной.
+    connect-per-query для этого не подходит — каждый execute_query
+    коммитит сам. Внутри transaction() SQL выполняется на переданном
+    соединении conn; при исключении блока — автоматический откат:
+
+        with transaction() as conn:
+            conn.execute("INSERT INTO ...", (...))
+            conn.execute("INSERT INTO ...", (...))
+
+    Вложенные вызовы не поддерживаются (SQLite не допускает двойной
+    BEGIN на одном соединении) — верхний уровень всегда один.
+    """
+    import contextlib
+
+    @contextlib.contextmanager
+    def _scope():
+        conn = connect_to_db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    return _scope()
 
 # Функция для выполнения SQL-запросов
 def execute_query(query, params=None, fetch=False):
@@ -562,9 +605,27 @@ def get_users():
     return execute_query(query, fetch=True)
 
 # Получение записей журнала
-def get_logs():
+LOGS_PAGE_SIZE = 100  # размер страницы журнала (продолжение C-1)
+
+
+def count_logs() -> int:
+    """Всего записей в журнале (для расчёта числа страниц, C-1)."""
+    rows = execute_query("SELECT COUNT(*) AS c FROM logs", fetch=True)
+    return int(rows[0]["c"]) if rows else 0
+
+
+def get_logs(limit=None, offset=0):
+    """Записи журнала действий.
+
+    limit=None — все строки (обратная совместимость с dashboard_page),
+    иначе — страница размером limit со смещением offset (пагинация, C-1).
+    """
     query = "SELECT timestamp, username, action FROM logs ORDER BY timestamp DESC"
-    return execute_query(query, fetch=True)
+    params = ()
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params = (int(limit), int(offset))
+    return execute_query(query, params=params, fetch=True)
 
 def search_students_by_multiple_params(surname=None, name=None, lastname=None, group_name=None, course=None, age=None, gender=None, birthday=None, birthplace=None, citizenship=None, nationality=None, religion=None, marital_status=None, residence=None, bad_habits=None, health_status=None, interests=None, skills=None):
     conn = connect_to_db()
@@ -782,10 +843,13 @@ def update_student(student_id, student_data, actor_role=None):
     try:
         cursor.execute(query, params)
         conn.commit()
-        return cursor.rowcount > 0
+        ok = cursor.rowcount > 0
     finally:
         cursor.close()
         conn.close()
+    if ok:
+        _cache_invalidate("students")  # C-4: группа/курс могли измениться
+    return ok
 
 
 def add_student(student_data, actor_role=None):
@@ -1089,6 +1153,7 @@ def add_student(student_data, actor_role=None):
         cursor.close()
         conn.close()
 
+    _cache_invalidate("students")  # C-4: новый курсант меняет справочник групп
     return student_id
 
 
@@ -1099,22 +1164,59 @@ def add_student(student_data, actor_role=None):
 STUDENTS_PAGE_SIZE = 50
 
 
-def count_students() -> int:
-    """Всего курсантов в базе (для расчёта числа страниц пагинации, C-1)."""
-    rows = execute_query("SELECT COUNT(*) AS c FROM students", fetch=True)
+def count_students(group_name=None, course=None) -> int:
+    """Всего курсантов в базе (для расчёта числа страниц пагинации, C-1).
+
+    Фильтры group_name/course работают синхронно с get_students().
+    """
+    query = "SELECT COUNT(*) AS c FROM students WHERE 1=1"
+    params = []
+    if group_name:
+        query += " AND o_group_name = ?"
+        params.append(group_name)
+    if course is not None:
+        query += " AND o_course = ?"
+        params.append(int(course))
+    rows = execute_query(query, params=tuple(params), fetch=True)
     return int(rows[0]["c"]) if rows else 0
 
 
-def get_students(limit=None, offset=0):
+def get_students(limit=None, offset=0, group_name=None, course=None):
     """Список курсантов. limit=None — все записи (обратная совместимость),
-    иначе — страница размером limit со смещением offset (пагинация, C-1)."""
+    иначе — страница размером limit со смещением offset (пагинация, C-1).
+
+    group_name/course — необязательные фильтры справочниками (C-4):
+    точное совпадение группы / номер курса набора.
+    """
     query = ("SELECT id, o_surname, o_name, o_lastname, o_course, o_group_name "
-             "FROM students ORDER BY id")
-    params = ()
+             "FROM students WHERE 1=1")
+    params = []
+    if group_name:
+        query += " AND o_group_name = ?"
+        params.append(group_name)
+    if course is not None:
+        query += " AND o_course = ?"
+        params.append(int(course))
+    query += " ORDER BY id"
     if limit is not None:
         query += " LIMIT ? OFFSET ?"
-        params = (int(limit), int(offset))
-    return execute_query(query, params=params, fetch=True)
+        params.extend((int(limit), int(offset)))
+    return execute_query(query, params=tuple(params), fetch=True)
+
+
+def list_groups():
+    """Уникальные названия групп (справочник фильтров, C-4)."""
+    return execute_query(
+        "SELECT DISTINCT o_group_name FROM students "
+        "WHERE o_group_name IS NOT NULL AND o_group_name <> '' "
+        "ORDER BY o_group_name", fetch=True)
+
+
+def list_courses():
+    """Уникальные курсы набора в порядке возрастания (справочник, C-4)."""
+    return execute_query(
+        "SELECT DISTINCT o_course FROM students "
+        "WHERE o_course IS NOT NULL ORDER BY o_course", fetch=True)
 
 
 # --- Глобальный поиск: выборки всех записей с ФИО (для app/global_search.py).
