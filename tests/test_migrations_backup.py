@@ -98,3 +98,19 @@ def test_backup_returns_none_without_db(tmp_path, monkeypatch):
         sys.modules.pop(m, None)
     import database as db
     assert db.backup_database(backups_dir=tmp_path / "b") is None
+
+
+# ---------- C-2: индексы под частые фильтры ----------
+
+def test_frequent_filter_indexes_exist(db):
+    """init_mkr_tables() создаёт индексы под типовые выборки (A-план C-2)."""
+    db.init_mkr_tables()
+    conn = db.connect_to_db()
+    try:
+        # row_factory не выставлен — строки обычные кортежи, имя индекса [1]
+        names = {r[1] for r in
+                 conn.execute("PRAGMA index_list(students)").fetchall()}
+    finally:
+        conn.close()
+    assert {"idx_students_surname", "idx_students_group",
+            "idx_students_course"} <= names

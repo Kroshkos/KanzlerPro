@@ -1209,6 +1209,12 @@ MKR_TABLES_SQL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_rr_student ON roadmap_reviews(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_rr_status ON roadmap_reviews(status)",
+    # C-2: индексы под частые фильтры (поиск по ФИО — префикс, выборки по
+    # группе/курсу из списка курсантов и фильтра поиска). Колонки с префиксом
+    # o_ — исторические имена схемы таблицы students.
+    "CREATE INDEX IF NOT EXISTS idx_students_surname ON students(o_surname)",
+    "CREATE INDEX IF NOT EXISTS idx_students_group ON students(o_group_name)",
+    "CREATE INDEX IF NOT EXISTS idx_students_course ON students(o_course)",
 ]
 
 
