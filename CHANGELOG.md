@@ -31,6 +31,15 @@
 ### Changed
 - SQL из UI-страниц вынесен в `repositories.py` / `database.py` (A-1).
 - Публичные функции `database.py` аннотированы типами (A-5).
+- Пути фотохранилища резолвятся динамически: `photo_storage._photos_dir()`
+  и `doctor.check_photos()` больше не зависят от импортного снимка
+  `config.PHOTOS_DIR` — устранён рассинхрон путей при подмене конфигурации
+  (regression-тест `test_doctor_check_photos_flags_legacy_base64`).
+
+### Removed
+- Из бэклога (`docs/BACKLOG.md`) исключены пункты F-8 (сетевой режим),
+  F-9 (QR-пропуска/бейджи) и F-10 (локализация интерфейса) — не входят в
+  план развития.
 
 ## [1.0.0] - 2026-10
 ### Added

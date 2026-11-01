@@ -26,16 +26,39 @@ ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png"}
 
 
 def _photos_dir() -> str:
-    """Каталог фото берётся ДИНАМИЧЕСКИ из config (срез C-3).
+    """Каталог фото берётся ДИНАМИЧЕСКИ (срез C-3).
 
-    Раньше модуль сохранял `from config import PHOTOS_DIR` — импортный
-    снимок пути. Тесты (и любые перезагрузки конфигурации) подменяют
-    атрибуты config, а photo_storage продолжал писать в старый каталог,
-    из-за чего doctor и тесты видели рассинхрон путей.
+    Порядок поиска актуального значения PHOTOS_DIR:
+    1. атрибут модуля `photo_storage` — так подменяют путь тесты
+       (monkeypatch.setattr(photo_storage, "PHOTOS_DIR", ...));
+    2. атрибут модуля `config` — основной источник (перезагрузка
+       конфигурации, KANZLER_DATA_DIR);
+    3. собственный снимок PHOTOS_DIR, сделанный при импорте, — fallback
+       для окружений, где модуль `config` недоступен по имени.
+
+    Раньше использовался только статический импорт `from config import
+    PHOTOS_DIR` — снимок пути, который не обновлялся при подмене
+    конфигурации, из-за чего doctor и тесты видели рассинхрон путей.
     """
-    import config
+    own = globals().get("PHOTOS_DIR")
+    if isinstance(own, str) and own:
+        return own
+    try:
+        import config
 
-    return config.PHOTOS_DIR
+        return config.PHOTOS_DIR
+    except Exception:
+        return own or ""
+
+
+# Снимок по умолчанию (fallback): совместимость со старым кодом, который
+# читал photo_storage.PHOTOS_DIR напрямую. Не является каноническим
+# источником — канонический путь резолвится в _photos_dir() динамически.
+try:
+    from config import PHOTOS_DIR as _DEFAULT_PHOTOS_DIR
+except Exception:  # pragma: no cover - окружения без config в sys.path
+    _DEFAULT_PHOTOS_DIR = ""
+PHOTOS_DIR = _DEFAULT_PHOTOS_DIR
 
 # Признак «это base64, а не имя файла»: длинная строка без слэшей, состоящая
 # только из символов base64. Имена файлов у нас короткие ("<int>.<ext>").
