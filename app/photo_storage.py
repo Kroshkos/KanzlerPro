@@ -20,11 +20,45 @@ import binascii
 import os
 import re
 
-from config import PHOTOS_DIR
-
 # Разрешённые расширения загружаемых фото (совпадает с allowed_extensions
 # FilePicker в форме добавления курсанта).
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png"}
+
+
+def _photos_dir() -> str:
+    """Каталог фото берётся ДИНАМИЧЕСКИ (срез C-3).
+
+    Порядок поиска актуального значения PHOTOS_DIR:
+    1. атрибут модуля `photo_storage` — так подменяют путь тесты
+       (monkeypatch.setattr(photo_storage, "PHOTOS_DIR", ...));
+    2. атрибут модуля `config` — основной источник (перезагрузка
+       конфигурации, KANZLER_DATA_DIR);
+    3. собственный снимок PHOTOS_DIR, сделанный при импорте, — fallback
+       для окружений, где модуль `config` недоступен по имени.
+
+    Раньше использовался только статический импорт `from config import
+    PHOTOS_DIR` — снимок пути, который не обновлялся при подмене
+    конфигурации, из-за чего doctor и тесты видели рассинхрон путей.
+    """
+    own = globals().get("PHOTOS_DIR")
+    if isinstance(own, str) and own:
+        return own
+    try:
+        import config
+
+        return config.PHOTOS_DIR
+    except Exception:
+        return own or ""
+
+
+# Снимок по умолчанию (fallback): совместимость со старым кодом, который
+# читал photo_storage.PHOTOS_DIR напрямую. Не является каноническим
+# источником — канонический путь резолвится в _photos_dir() динамически.
+try:
+    from config import PHOTOS_DIR as _DEFAULT_PHOTOS_DIR
+except Exception:  # pragma: no cover - окружения без config в sys.path
+    _DEFAULT_PHOTOS_DIR = ""
+PHOTOS_DIR = _DEFAULT_PHOTOS_DIR
 
 # Признак «это base64, а не имя файла»: длинная строка без слэшей, состоящая
 # только из символов base64. Имена файлов у нас короткие ("<int>.<ext>").
@@ -44,9 +78,10 @@ def save_photo(raw_bytes: bytes, student_id: int, ext: str = "jpg") -> str:
     """
     if not raw_bytes:
         return ""
-    os.makedirs(PHOTOS_DIR, exist_ok=True)
+    photos_dir = _photos_dir()
+    os.makedirs(photos_dir, exist_ok=True)
     filename = f"{int(student_id)}.{_valid_ext(ext)}"
-    path = os.path.join(PHOTOS_DIR, filename)
+    path = os.path.join(photos_dir, filename)
     with open(path, "wb") as f:
         f.write(raw_bytes)
     return filename
@@ -139,8 +174,9 @@ def photo_path(value: str):
         return None
     if os.sep in value or "/" in value or ".." in value:
         return None
-    path = os.path.realpath(os.path.join(PHOTOS_DIR, value))
-    if not path.startswith(os.path.realpath(PHOTOS_DIR) + os.sep):
+    photos_dir = _photos_dir()
+    path = os.path.realpath(os.path.join(photos_dir, value))
+    if not path.startswith(os.path.realpath(photos_dir) + os.sep):
         return None
     return path
 

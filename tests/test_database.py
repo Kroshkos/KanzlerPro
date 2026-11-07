@@ -133,3 +133,111 @@ def test_log_action_and_get_logs(db):
     logs = db.get_logs()
     assert any("тестовое действие" in str(l["action"] if hasattr(l, "keys") else l[2])
                for l in logs)
+
+
+def test_roadmap_stats_includes_by_group(db):
+    """F-4: get_roadmap_stats возвращает агрегацию баллов по группам."""
+    sid = _add_student(db)  # группа 'А-12', курс 3
+    _seed_achievement(db)
+    db.add_review(sid, "ach_test_1", semester=1, actor_role=db.ADMIN_ROLE)
+    rid = db.execute_query("SELECT id FROM roadmap_reviews LIMIT 1", fetch=True)[0]["id"]
+    db.update_review(rid, "approved", final_points=12, actor_role=db.ADMIN_ROLE)
+    stats = db.get_roadmap_stats()
+    assert "by_group" in stats
+    rows = list(stats["by_group"])
+    grp = next(r for r in rows if r["o_group_name"] == "А-12")
+    assert (grp["pts"] or 0) >= 12
+    assert grp["o_course"] == 3
+
+
+# ---------- F-3: уведомления о сроках (семестровые статусы, баллы) ----------
+
+def test_students_missing_semester_status(db):
+    """Курсант без статуса попадает в список; закрытый семестр — исчезает."""
+    sid1 = _add_student(db)
+    sid2 = db.execute_query(
+        "INSERT INTO students (o_surname, o_name, o_lastname, o_course,"
+        " o_group_name) VALUES ('Петров','Пётр','Петрович',3,'А-12')"
+        " RETURNING id", fetch=True)[0]["id"]
+
+    rows = db.students_missing_semester_status(semester=1)
+    ids = {r["student_id"] for r in rows}
+    assert sid1 in ids and sid2 in ids
+    assert db.count_students_missing_semester_status(semester=1) == 2
+
+    db.set_semester_status(sid1, 1, is_candidate=True, actor_role=db.ADMIN_ROLE)
+    rows = db.students_missing_semester_status(semester=1)
+    ids = {r["student_id"] for r in rows}
+    assert sid1 not in ids and sid2 in ids
+    assert db.count_students_missing_semester_status(semester=1) == 1
+
+
+def test_count_unresolved_reviews_scoped_by_semester(db):
+    """Счётчик неподтверждённых баллов учитывает только указанный семестр."""
+    sid = _add_student(db)
+    _seed_achievement(db)
+    db.add_review(sid, "ach_test_1", semester=2, actor_role=db.ADMIN_ROLE)
+    assert db.count_unresolved_reviews(semester=2) == 1
+    assert db.count_unresolved_reviews(semester=1) == 0
+    # без ограничения — все pending
+    assert db.count_unresolved_reviews() == 1
+
+
+def test_notifications_functions_survive_empty_db(db):
+    """На пустой базе функции уведомлений возвращают нули/пусто, не падая."""
+    db.execute_query("DELETE FROM students")
+    assert db.students_missing_semester_status() == []
+    assert db.count_students_missing_semester_status() == 0
+    assert db.count_unresolved_reviews() == 0
+
+
+# ---------- F-7: архивирование рейтингов по семестрам ----------
+
+def test_archive_semester_rating_freezes_points(db):
+    """Снимок замораживает баллы/места; пересмотр заявок его не меняет."""
+    sid = _add_student(db)
+    _seed_achievement(db)
+    db.add_review(sid, "ach_test_1", semester=1, actor_role=db.ADMIN_ROLE)
+    rid = db.execute_query("SELECT id FROM roadmap_reviews LIMIT 1",
+                           fetch=True)[0]["id"]
+    db.update_review(rid, "approved", final_points=12, actor_role=db.ADMIN_ROLE)
+
+    snap_id = db.archive_semester_rating(1, note="итог", actor_role=db.ADMIN_ROLE)
+    rows = db.get_rating_snapshot(snap_id)
+    assert len(rows) == 1
+    assert rows[0]["points"] == 12 and rows[0]["place"] == 1
+    assert rows[0]["surname"] == "Иванов"
+
+    snaps = list(db.list_rating_snapshots())
+    assert any(s["id"] == snap_id and s["semester"] == 1 for s in snaps)
+
+    # Пересмотр заявки задним числом — снимок остаётся прежним
+    db.update_review(rid, "approved", final_points=99, actor_role=db.ADMIN_ROLE)
+    assert db.get_rating_snapshot(snap_id)[0]["points"] == 12
+
+
+def test_archive_semester_rating_replaces_previous(db):
+    """Повторная архивация того же семестра заменяет прежний снимок."""
+    sid = _add_student(db)
+    _seed_achievement(db)
+    db.add_review(sid, "ach_test_1", semester=2, actor_role=db.ADMIN_ROLE)
+    rid = db.execute_query("SELECT id FROM roadmap_reviews LIMIT 1",
+                           fetch=True)[0]["id"]
+    db.update_review(rid, "approved", final_points=5, actor_role=db.ADMIN_ROLE)
+
+    first = db.archive_semester_rating(2, actor_role=db.ADMIN_ROLE)
+    second = db.archive_semester_rating(2, actor_role=db.ADMIN_ROLE)
+    assert first != second
+    snaps = [s for s in db.list_rating_snapshots() if s["semester"] == 2]
+    assert len(snaps) == 1 and snaps[0]["id"] == second
+    assert db.get_rating_snapshot(first) == []  # старый каскадно удалён
+
+
+def test_archive_semester_rating_rbac_and_validation(db):
+    """Не-админ не может архивировать; недопустимый семестр — ValueError."""
+    import pytest
+    from access import PermissionDeniedError
+    with pytest.raises(PermissionDeniedError):
+        db.archive_semester_rating(1, actor_role=db.DEFAULT_ROLE)
+    with pytest.raises(ValueError):
+        db.archive_semester_rating(99, actor_role=db.ADMIN_ROLE)

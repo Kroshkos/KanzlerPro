@@ -1633,18 +1633,6 @@ def calculate_final_points(calc_type: str, base_points: int | None, k_ur: float 
     return round(total + int(ip_bonus or 0))
 
 
-def count_pending_reviews() -> int:
-    """Число заявок на экспертизу Road Map в статусе 'на рассмотрении'."""
-    try:
-        rows = execute_query(
-            "SELECT COUNT(*) FROM roadmap_reviews WHERE status = 'pending'",
-            fetch=True)
-        return int(rows[0][0]) if rows else 0
-    except Exception:
-        log_except("database: count_pending_reviews")
-        return 0
-
-
 def get_recent_pending_reviews(limit: int = 10) -> list[sqlite3.Row]:
     """Последние новые заявки (для колокольчика уведомлений).
 
@@ -1879,6 +1867,193 @@ def get_semester_average(student_id: int, semester: int) -> float | None:
     return rows[0]["average_score"] if rows else None
 
 
+def count_pending_reviews() -> int:
+    """Число заявок на экспертизу Road Map в статусе 'на рассмотрении'."""
+    try:
+        rows = execute_query(
+            "SELECT COUNT(*) FROM roadmap_reviews WHERE status = 'pending'",
+            fetch=True)
+        return int(rows[0][0]) if rows else 0
+    except Exception:
+        log_except("database: count_pending_reviews")
+        return 0
+
+
+# --- F-3: уведомления о сроках (семестровые статусы и неподтверждённые баллы)
+
+SEMESTERS_MIN, SEMESTERS_MAX = 1, 8
+
+
+def _semester_bounds(semester: int | None) -> tuple[int, int]:
+    """Границы диапазона семестров для запросов уведомлений."""
+    if semester is not None:
+        s = max(int(semester), 1)
+        return s, s
+    return SEMESTERS_MIN, SEMESTERS_MAX
+
+
+def count_unresolved_reviews(semester: int | None = None) -> int:
+    """Число заявок Road Map без решения (pending) — «неподтверждённые баллы»."""
+    lo, hi = _semester_bounds(semester)
+    try:
+        rows = execute_query(
+            "SELECT COUNT(*) FROM roadmap_reviews "
+            "WHERE status = 'pending' AND semester BETWEEN ? AND ?",
+            (lo, hi), fetch=True)
+        return int(rows[0][0]) if rows else 0
+    except Exception:
+        log_except("database: count_unresolved_reviews")
+        return 0
+
+
+def students_missing_semester_status(semester: int | None = None,
+                                     limit: int = 50) -> list[sqlite3.Row]:
+    """Курсанты без записи семестрового статуса за семестр (или несколько).
+
+    Используется колокольчиком уведомлений (F-3): незакрытые семестровые
+    статусы («кандидат»/«резидент») — сигнал куратору и курсанту.
+    """
+    lo, hi = _semester_bounds(semester)
+    try:
+        return execute_query(
+            "SELECT s.id AS student_id, s.o_surname, s.o_name, "
+            "       s.o_lastname, s.o_group_name, s.o_course, "
+            "       CAST(? || '' AS INTEGER) AS semester_lo, "
+            "       CAST(? || '' AS INTEGER) AS semester_hi "
+            "FROM students s "
+            "WHERE s.id NOT IN ("
+            "    SELECT ss.student_id FROM student_semester_status ss "
+            "    WHERE ss.semester BETWEEN ? AND ?"
+            ") "
+            "ORDER BY s.o_course, s.o_surname, s.o_name, s.o_lastname "
+            "LIMIT ?",
+            (lo, hi, lo, hi, int(limit)), fetch=True) or []
+    except Exception:
+        log_except("database: students_missing_semester_status")
+        return []
+
+
+def count_students_missing_semester_status(semester: int | None = None) -> int:
+    """То же, что students_missing_semester_status, но только счётчик (для бейджа)."""
+    lo, hi = _semester_bounds(semester)
+    try:
+        rows = execute_query(
+            "SELECT COUNT(*) FROM students s "
+            "WHERE s.id NOT IN ("
+            "    SELECT ss.student_id FROM student_semester_status ss "
+            "    WHERE ss.semester BETWEEN ? AND ?"
+            ")",
+            (lo, hi), fetch=True)
+        return int(rows[0][0]) if rows else 0
+    except Exception:
+        log_except("database: count_students_missing_semester_status")
+        return 0
+
+
+# --- F-7: архивирование рейтингов по семестрам (снимки итогов) ---
+
+RATING_ARCHIVE_TABLES_SQL = [
+    """
+    CREATE TABLE IF NOT EXISTS rating_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        semester INTEGER NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        note TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rating_snapshot_rows (
+        snapshot_id INTEGER NOT NULL,
+        student_id INTEGER,
+        surname TEXT, name TEXT, lastname TEXT,
+        group_name TEXT, course INTEGER,
+        points INTEGER NOT NULL DEFAULT 0,
+        place INTEGER NOT NULL,
+        FOREIGN KEY(snapshot_id) REFERENCES rating_snapshots (id) ON DELETE CASCADE
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_rsr_snapshot ON rating_snapshot_rows(snapshot_id)",
+]
+
+
+def init_rating_archive_tables() -> None:
+    """Создаёт таблицы архива рейтингов (идемпотентно)."""
+    for sql in RATING_ARCHIVE_TABLES_SQL:
+        execute_query(sql)
+
+
+def archive_semester_rating(semester: int, note: str = "",
+                            actor_role: str | None = None) -> int:
+    """Заморозить итоги семестра: снимок баллов/мест в отдельную таблицу (F-7).
+
+    Повторный вызов для того же семестра заменяет прежний снимок
+    (каскадно удаляя строки), поэтому история всегда отражает последний
+    подтверждённый вариант — исторические отчёты не меняются задним числом
+    после пересмотра заявок до момента архивации.
+    Возвращает id нового снимка; при отсутствии одобренных баллов снимок
+    всё равно создаётся (пустой) — это явная отметка «семестр закрыт».
+    """
+    require_role(actor_role, action="archive_semester_rating")
+    s = int(semester)
+    if not (SEMESTERS_MIN <= s <= SEMESTERS_MAX):
+        raise ValueError(f"Недопустимый семестр: {s}")
+    init_rating_archive_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with transaction() as conn:
+        cur = conn.cursor()
+        # Замена предыдущего снимка этого семестра (ON DELETE CASCADE чистит строки)
+        cur.execute("DELETE FROM rating_snapshots WHERE semester = ?", (s,))
+        cur.execute(
+            "INSERT INTO rating_snapshots (semester, created_at, note) "
+            "VALUES (?, ?, ?)", (s, now, (note or "").strip() or None))
+        snap_id = cur.lastrowid
+        rows = cur.execute(
+            """SELECT s.id, s.o_surname, s.o_name, s.o_lastname,
+                      s.o_group_name, s.o_course,
+                      COALESCE(SUM(r.final_points), 0) pts
+               FROM students s
+               JOIN roadmap_reviews r ON r.student_id = s.id
+               WHERE r.status = 'approved' AND r.semester BETWEEN ? AND ?
+               GROUP BY s.id ORDER BY pts DESC""",
+            (s, s)).fetchall()
+        for place, r in enumerate(rows, 1):
+            cur.execute(
+                "INSERT INTO rating_snapshot_rows (snapshot_id, student_id, "
+                "surname, name, lastname, group_name, course, points, place) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (snap_id, r[0], r[1], r[2], r[3], r[4], r[5], r[6], place))
+    log_action(actor_role or "system",
+               f"Архивация рейтинга за {s}-й семестр ({len(rows)} курсантов)")
+    return int(snap_id)
+
+
+def list_rating_snapshots() -> list[sqlite3.Row]:
+    """Список архивных снимков с числом строк (для выбора в UI)."""
+    init_rating_archive_tables()
+    try:
+        return execute_query(
+            """SELECT rs.id, rs.semester, rs.created_at, rs.note,
+                      COUNT(rsr.id) AS rows_cnt
+               FROM rating_snapshots rs
+               LEFT JOIN rating_snapshot_rows rsr ON rsr.snapshot_id = rs.id
+               GROUP BY rs.id ORDER BY rs.semester DESC""", fetch=True) or []
+    except Exception:
+        log_except("database: list_rating_snapshots")
+        return []
+
+
+def get_rating_snapshot(snapshot_id: int) -> list[sqlite3.Row]:
+    """Строки рейтинга замороженного снимка по месту."""
+    init_rating_archive_tables()
+    try:
+        return execute_query(
+            "SELECT * FROM rating_snapshot_rows WHERE snapshot_id = ? "
+            "ORDER BY place", (int(snapshot_id),), fetch=True) or []
+    except Exception:
+        log_except("database: get_rating_snapshot")
+        return []
+
+
 def get_roadmap_stats() -> dict[str, Any]:
     """Сводка для дашборда: количество решений, топ студентов, разрез по блокам."""
     def scalar(query, params=()):
@@ -1906,4 +2081,17 @@ def get_roadmap_stats() -> dict[str, Any]:
            LEFT JOIN achievements_catalog a ON a.id = r.achievement_id
            WHERE r.status = 'approved' GROUP BY a.block ORDER BY a.block""",
         fetch=True)
+    # Рейтинг по группам (F-4): сумма одобренных баллов на группу
+    try:
+        stats["by_group"] = execute_query(
+            """SELECT s.o_group_name, s.o_course,
+                      COALESCE(SUM(r.final_points), 0) pts
+               FROM students s
+               JOIN roadmap_reviews r ON r.student_id = s.id
+               WHERE r.status = 'approved'
+               GROUP BY s.id, s.o_group_name, s.o_course
+               ORDER BY pts DESC LIMIT 12""", fetch=True)
+    except Exception:
+        log_except("database: get_roadmap_stats by_group")
+        stats["by_group"] = []
     return stats
