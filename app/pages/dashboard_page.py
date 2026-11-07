@@ -10,7 +10,8 @@ from datetime import datetime
 
 import flet as ft
 from authz import is_admin
-from database import get_logs, get_roadmap_stats
+from database import (archive_semester_rating, get_logs, get_rating_snapshot,
+                      get_roadmap_stats, list_rating_snapshots)
 from theme import (
     BG,
     INFO,
@@ -196,9 +197,16 @@ class DashboardPage(ft.Column):
             [section_title("Последние действия"), *log_rows], spacing=6),
             expand=True)
 
+        # ---------- Архив рейтингов по семестрам (F-7, только для админа) ----
+        archive_card = None
+        if is_admin(page_obj):
+            archive_card = self._build_archive_card()
+
         charts = ft.Row([top_card, blocks_card], spacing=16,
                         vertical_alignment=ft.CrossAxisAlignment.START)
-        analytics_row = ft.Row([groups_card, logs_card], spacing=16,
+        analytics_row = ft.Row([groups_card, logs_card] +
+                               ([archive_card] if archive_card else []),
+                               spacing=16,
                                vertical_alignment=ft.CrossAxisAlignment.START)
 
         menu_row = ft.Row([
@@ -217,6 +225,91 @@ class DashboardPage(ft.Column):
         self.controls = [_wrap(page_obj, self.body)] if parent is None else [self.body]
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    def _build_archive_card(self):
+        """Карточка архива рейтингов (F-7): снимок итогов семестра.
+
+        Заморозка баллов/мест нужна, чтобы исторические отчёты не менялись
+        задним числом после пересмотра заявок. Кнопка «Архивировать» доступна
+        только админу (проверка require_role продублирована в database.py).
+        """
+        self._archive_sem_dd = ft.Dropdown(
+            label="Семестр", width=120, dense=True,
+            options=[ft.Option(key=str(s), text=f"{s}-й")
+                     for s in range(1, 9)])
+        snaps = list_rating_snapshots() or []
+        snap_rows = []
+        for sn in snaps[:6]:
+            snap_rows.append(ft.Row([
+                ft.Text(f"{sn['semester']}-й сем.", size=12, weight="bold",
+                        color=TEXT_DARK, width=90),
+                ft.Text(f"{sn['rows_cnt']} поз.", size=12, color=TEXT_MUTED,
+                        width=70),
+                ft.Text(sn["created_at"] or "", size=11, color=TEXT_MUTED,
+                        expand=True),
+                ft.IconButton(ft.Icons.VIEW_LIST, tooltip="Просмотр снимка",
+                              icon_size=18,
+                              on_click=lambda e, sid=sn["id"],
+                              sem=sn["semester"]: self._show_snapshot(sid, sem)),
+            ]))
+        if not snap_rows:
+            snap_rows.append(ft.Text("Снимков пока нет — архивируйте итоги "
+                                     "семестра после его завершения.",
+                                     color=TEXT_MUTED, italic=True))
+        self._archive_list = ft.Column(snap_rows, spacing=4)
+        return card(ft.Column([
+            section_title("Архив рейтингов"),
+            self._archive_list,
+            ft.Row([self._archive_sem_dd,
+                    ft.FilledButton("Архивировать", icon=ft.Icons.LOCK,
+                                    on_click=self._archive_rating)]),
+        ], spacing=10), expand=True)
+
+    def _archive_rating(self, e):
+        from utils import show_snack
+        key = self._archive_sem_dd.value
+        if not key:
+            show_snack(self._page, "Выберите семестр для архивации")
+            return
+        role = session_get(self._page, "role") or ""
+        try:
+            archive_semester_rating(int(key), actor_role=role)
+        except Exception as exc:
+            show_snack(self._page, f"Не удалось архивировать: {exc}")
+            return
+        show_snack(self._page, f"Рейтинг за {key}-й семестр архивирован")
+        self.refresh(None)
+
+    def _show_snapshot(self, snapshot_id, semester):
+        rows = get_rating_snapshot(snapshot_id) or []
+        body = [ft.Text(f"Снимок за {semester}-й семестр · "
+                        f"{len(rows)} курсантов",
+                        size=13, weight="bold", color=TEXT_DARK)]
+        for r in rows[:50]:
+            fio = " ".join(x for x in (r["surname"], r["name"], r["lastname"])
+                           if x)
+            body.append(ft.Row([
+                ft.Text(str(r["place"]), width=36, color=TEXT_MUTED),
+                ft.Text(fio, expand=True, size=13, color=TEXT_DARK),
+                ft.Text(str(r["points"]), size=13, weight="bold",
+                        color=SUCCESS),
+            ]))
+        if not rows:
+            body.append(ft.Text("В снимке нет строк (на момент архивации "
+                                "одобренных баллов не было).",
+                                color=TEXT_MUTED, italic=True))
+        dlg = ft.AlertDialog(title=ft.Text("Архив рейтинга"),
+                             content=ft.Column(body, spacing=4,
+                                               scroll=ft.ScrollMode.AUTO,
+                                               width=460),
+                             actions=[ft.TextButton("Закрыть",
+                                                    on_click=lambda e: (
+                                                        setattr(dlg, "open", False),
+                                                        self._page.update()))])
+        self._page.dialog = dlg
+        dlg.open = True
+        self._page.update()
+
     def open(self, cls_name):
         if self.nav_parent is not None:
             self.nav_parent.go_to(cls_name)

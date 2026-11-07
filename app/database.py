@@ -1950,6 +1950,110 @@ def count_students_missing_semester_status(semester: int | None = None) -> int:
         return 0
 
 
+# --- F-7: архивирование рейтингов по семестрам (снимки итогов) ---
+
+RATING_ARCHIVE_TABLES_SQL = [
+    """
+    CREATE TABLE IF NOT EXISTS rating_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        semester INTEGER NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        note TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rating_snapshot_rows (
+        snapshot_id INTEGER NOT NULL,
+        student_id INTEGER,
+        surname TEXT, name TEXT, lastname TEXT,
+        group_name TEXT, course INTEGER,
+        points INTEGER NOT NULL DEFAULT 0,
+        place INTEGER NOT NULL,
+        FOREIGN KEY(snapshot_id) REFERENCES rating_snapshots (id) ON DELETE CASCADE
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_rsr_snapshot ON rating_snapshot_rows(snapshot_id)",
+]
+
+
+def init_rating_archive_tables() -> None:
+    """Создаёт таблицы архива рейтингов (идемпотентно)."""
+    for sql in RATING_ARCHIVE_TABLES_SQL:
+        execute_query(sql)
+
+
+def archive_semester_rating(semester: int, note: str = "",
+                            actor_role: str | None = None) -> int:
+    """Заморозить итоги семестра: снимок баллов/мест в отдельную таблицу (F-7).
+
+    Повторный вызов для того же семестра заменяет прежний снимок
+    (каскадно удаляя строки), поэтому история всегда отражает последний
+    подтверждённый вариант — исторические отчёты не меняются задним числом
+    после пересмотра заявок до момента архивации.
+    Возвращает id нового снимка; при отсутствии одобренных баллов снимок
+    всё равно создаётся (пустой) — это явная отметка «семестр закрыт».
+    """
+    require_role(actor_role, action="archive_semester_rating")
+    s = int(semester)
+    if not (SEMESTERS_MIN <= s <= SEMESTERS_MAX):
+        raise ValueError(f"Недопустимый семестр: {s}")
+    init_rating_archive_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with transaction() as conn:
+        cur = conn.cursor()
+        # Замена предыдущего снимка этого семестра (ON DELETE CASCADE чистит строки)
+        cur.execute("DELETE FROM rating_snapshots WHERE semester = ?", (s,))
+        cur.execute(
+            "INSERT INTO rating_snapshots (semester, created_at, note) "
+            "VALUES (?, ?, ?)", (s, now, (note or "").strip() or None))
+        snap_id = cur.lastrowid
+        rows = cur.execute(
+            """SELECT s.id, s.o_surname, s.o_name, s.o_lastname,
+                      s.o_group_name, s.o_course,
+                      COALESCE(SUM(r.final_points), 0) pts
+               FROM students s
+               JOIN roadmap_reviews r ON r.student_id = s.id
+               WHERE r.status = 'approved' AND r.semester BETWEEN ? AND ?
+               GROUP BY s.id ORDER BY pts DESC""",
+            (s, s)).fetchall()
+        for place, r in enumerate(rows, 1):
+            cur.execute(
+                "INSERT INTO rating_snapshot_rows (snapshot_id, student_id, "
+                "surname, name, lastname, group_name, course, points, place) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (snap_id, r[0], r[1], r[2], r[3], r[4], r[5], r[6], place))
+    log_action(actor_role or "system",
+               f"Архивация рейтинга за {s}-й семестр ({len(rows)} курсантов)")
+    return int(snap_id)
+
+
+def list_rating_snapshots() -> list[sqlite3.Row]:
+    """Список архивных снимков с числом строк (для выбора в UI)."""
+    init_rating_archive_tables()
+    try:
+        return execute_query(
+            """SELECT rs.id, rs.semester, rs.created_at, rs.note,
+                      COUNT(rsr.id) AS rows_cnt
+               FROM rating_snapshots rs
+               LEFT JOIN rating_snapshot_rows rsr ON rsr.snapshot_id = rs.id
+               GROUP BY rs.id ORDER BY rs.semester DESC""", fetch=True) or []
+    except Exception:
+        log_except("database: list_rating_snapshots")
+        return []
+
+
+def get_rating_snapshot(snapshot_id: int) -> list[sqlite3.Row]:
+    """Строки рейтинга замороженного снимка по месту."""
+    init_rating_archive_tables()
+    try:
+        return execute_query(
+            "SELECT * FROM rating_snapshot_rows WHERE snapshot_id = ? "
+            "ORDER BY place", (int(snapshot_id),), fetch=True) or []
+    except Exception:
+        log_except("database: get_rating_snapshot")
+        return []
+
+
 def get_roadmap_stats() -> dict[str, Any]:
     """Сводка для дашборда: количество решений, топ студентов, разрез по блокам."""
     def scalar(query, params=()):

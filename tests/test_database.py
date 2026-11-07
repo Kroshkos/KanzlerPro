@@ -189,3 +189,55 @@ def test_notifications_functions_survive_empty_db(db):
     assert db.students_missing_semester_status() == []
     assert db.count_students_missing_semester_status() == 0
     assert db.count_unresolved_reviews() == 0
+
+
+# ---------- F-7: архивирование рейтингов по семестрам ----------
+
+def test_archive_semester_rating_freezes_points(db):
+    """Снимок замораживает баллы/места; пересмотр заявок его не меняет."""
+    sid = _add_student(db)
+    _seed_achievement(db)
+    db.add_review(sid, "ach_test_1", semester=1, actor_role=db.ADMIN_ROLE)
+    rid = db.execute_query("SELECT id FROM roadmap_reviews LIMIT 1",
+                           fetch=True)[0]["id"]
+    db.update_review(rid, "approved", final_points=12, actor_role=db.ADMIN_ROLE)
+
+    snap_id = db.archive_semester_rating(1, note="итог", actor_role=db.ADMIN_ROLE)
+    rows = db.get_rating_snapshot(snap_id)
+    assert len(rows) == 1
+    assert rows[0]["points"] == 12 and rows[0]["place"] == 1
+    assert rows[0]["surname"] == "Иванов"
+
+    snaps = list(db.list_rating_snapshots())
+    assert any(s["id"] == snap_id and s["semester"] == 1 for s in snaps)
+
+    # Пересмотр заявки задним числом — снимок остаётся прежним
+    db.update_review(rid, "approved", final_points=99, actor_role=db.ADMIN_ROLE)
+    assert db.get_rating_snapshot(snap_id)[0]["points"] == 12
+
+
+def test_archive_semester_rating_replaces_previous(db):
+    """Повторная архивация того же семестра заменяет прежний снимок."""
+    sid = _add_student(db)
+    _seed_achievement(db)
+    db.add_review(sid, "ach_test_1", semester=2, actor_role=db.ADMIN_ROLE)
+    rid = db.execute_query("SELECT id FROM roadmap_reviews LIMIT 1",
+                           fetch=True)[0]["id"]
+    db.update_review(rid, "approved", final_points=5, actor_role=db.ADMIN_ROLE)
+
+    first = db.archive_semester_rating(2, actor_role=db.ADMIN_ROLE)
+    second = db.archive_semester_rating(2, actor_role=db.ADMIN_ROLE)
+    assert first != second
+    snaps = [s for s in db.list_rating_snapshots() if s["semester"] == 2]
+    assert len(snaps) == 1 and snaps[0]["id"] == second
+    assert db.get_rating_snapshot(first) == []  # старый каскадно удалён
+
+
+def test_archive_semester_rating_rbac_and_validation(db):
+    """Не-админ не может архивировать; недопустимый семестр — ValueError."""
+    import pytest
+    from access import PermissionDeniedError
+    with pytest.raises(PermissionDeniedError):
+        db.archive_semester_rating(1, actor_role=db.DEFAULT_ROLE)
+    with pytest.raises(ValueError):
+        db.archive_semester_rating(99, actor_role=db.ADMIN_ROLE)
