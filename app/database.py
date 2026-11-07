@@ -2033,7 +2033,7 @@ def list_rating_snapshots() -> list[sqlite3.Row]:
     try:
         return execute_query(
             """SELECT rs.id, rs.semester, rs.created_at, rs.note,
-                      COUNT(rsr.id) AS rows_cnt
+                      COUNT(rsr.rowid) AS rows_cnt
                FROM rating_snapshots rs
                LEFT JOIN rating_snapshot_rows rsr ON rsr.snapshot_id = rs.id
                GROUP BY rs.id ORDER BY rs.semester DESC""", fetch=True) or []

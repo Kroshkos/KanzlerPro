@@ -1,0 +1,16 @@
+2026-11-07 21:08:09,221 [ERROR] database: list_rating_snapshots: no such column: rsr.id
+Traceback (most recent call last):
+  File "/workspace/app/database.py", line 2034, in list_rating_snapshots
+    return execute_query(
+           ^^^^^^^^^^^^^^
+  File "/workspace/app/database.py", line 162, in execute_query
+    cursor.execute(query, params or ())
+sqlite3.OperationalError: no such column: rsr.id
+2026-11-07 21:08:09,497 [ERROR] database: list_rating_snapshots: no such column: rsr.id
+Traceback (most recent call last):
+  File "/workspace/app/database.py", line 2034, in list_rating_snapshots
+    return execute_query(
+           ^^^^^^^^^^^^^^
+  File "/workspace/app/database.py", line 162, in execute_query
+    cursor.execute(query, params or ())
+sqlite3.OperationalError: no such column: rsr.id

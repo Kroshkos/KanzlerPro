@@ -10,8 +10,13 @@ from datetime import datetime
 
 import flet as ft
 from authz import is_admin
-from database import (archive_semester_rating, get_logs, get_rating_snapshot,
-                      get_roadmap_stats, list_rating_snapshots)
+from database import (
+    archive_semester_rating,
+    get_logs,
+    get_rating_snapshot,
+    get_roadmap_stats,
+    list_rating_snapshots,
+)
 from theme import (
     BG,
     INFO,
